@@ -21,9 +21,14 @@ endif()
 
 # Include llama.cpp common/ directory for Jinja2 chat template support
 target_include_directories(${TARGET} PRIVATE
-	${CMAKE_SOURCE_DIR}/tp/llama.cpp/common
-	${CMAKE_SOURCE_DIR}/tp/llama.cpp/vendor
+	${CMAKE_SOURCE_DIR}/native/tp/llama.cpp/common
+	${CMAKE_SOURCE_DIR}/native/tp/llama.cpp/vendor
 )
+
+# Jinja2 headers contain UTF-8 characters (e.g. ↵), MSVC needs /utf-8
+if(MSVC)
+target_compile_options(${TARGET} PRIVATE /utf-8)
+endif()
 
 # When breaking changes are not functionally critical
 # we keep building against older, in order to extend the life

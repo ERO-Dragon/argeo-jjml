@@ -148,7 +148,9 @@ static jobjectArray jjml_lama_get_meta(JNIEnv *env, llama_model *model,
 				std::string u8_res;
 				if (length > META_BUFFER_SIZE) { // chat templates can be quite big
 					char big_buf[META_BIG_BUFFER_SIZE];
-					length = supplier(i, big_buf, length);
+					// +1 for null terminator: snprintf needs buf_size to include
+					// the null terminator, but 'length' is the string length without it
+					length = supplier(i, big_buf, length + 1);
 					u8_res = std::string(big_buf, length);
 				} else {
 					u8_res = std::string(buf, length);
@@ -199,7 +201,7 @@ JNIEXPORT jbyteArray JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doGetDescript
 		std::string u8_res;
 		if (length > META_BUFFER_SIZE) { // big description
 			char big_buf[META_BIG_BUFFER_SIZE];
-			length = llama_model_desc(model, big_buf, length);
+			length = llama_model_desc(model, big_buf, length + 1);
 			u8_res = std::string(big_buf, length);
 		} else {
 			u8_res = std::string(buf, length);

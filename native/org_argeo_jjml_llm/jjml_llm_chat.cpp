@@ -101,7 +101,7 @@ JNIEXPORT jbyteArray JNICALL Java_org_argeo_jjml_llm_LLamaCppNativeChatFormatter
 	assert(env->GetArrayLength(contents) == messages_size);
 
 	try {
-		auto *model = argeo::jni::as_pointer<llama_model*>(env, modelPointer);
+		auto *model = argeo::jni::as_pointer<llama_model*>(modelPointer);
 
 		// Build messages
 		std::vector<common_chat_msg> chat_messages;
@@ -158,7 +158,7 @@ JNIEXPORT jbyteArray JNICALL Java_org_argeo_jjml_llm_LLamaCppNativeChatFormatter
 JNIEXPORT jboolean JNICALL Java_org_argeo_jjml_llm_LLamaCppNativeChatFormatter_doSupportsEnableThinking(
 		JNIEnv *env, jclass, jlong modelPointer, jbyteArray chatTemplateStr) {
 	try {
-		auto *model = argeo::jni::as_pointer<llama_model*>(env, modelPointer);
+		auto *model = argeo::jni::as_pointer<llama_model*>(modelPointer);
 
 		std::string u8_chat_template;
 		if (chatTemplateStr != nullptr)

@@ -218,11 +218,14 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 	 * Resolve the effective enable_thinking flag from the given thinking mode.
 	 */
 	private boolean resolveEnableThinking(ThinkingMode thinkingMode) {
-		return switch (Objects.requireNonNull(thinkingMode)) {
-		case ENABLED -> true;
-		case DISABLED -> false;
-		case AUTO -> supportsEnableThinking();
-		};
+		Objects.requireNonNull(thinkingMode);
+		if (thinkingMode == ThinkingMode.ENABLED) {
+			return true;
+		} else if (thinkingMode == ThinkingMode.DISABLED) {
+			return false;
+		} else {
+			return supportsEnableThinking();
+		}
 	}
 
 	/**
