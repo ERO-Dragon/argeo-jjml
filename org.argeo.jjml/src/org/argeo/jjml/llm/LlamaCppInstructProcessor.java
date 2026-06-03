@@ -12,13 +12,26 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
+import org.argeo.jjml.llm.util.ThinkingMode;
+
 /** A processor based on chat messages. */
 public class LlamaCppInstructProcessor extends LlamaCppBatchProcessor {
 	private final LlamaCppVocabulary vocabulary;
+	private ThinkingMode thinkingMode = ThinkingMode.AUTO;
 
 	public LlamaCppInstructProcessor(LlamaCppContext context, LlamaCppSamplerChain samplerChain) {
 		super(context, samplerChain);
 		this.vocabulary = context.getModel().getVocabulary();
+	}
+
+	/** Set the thinking mode for chat template formatting. */
+	public void setThinkingMode(ThinkingMode thinkingMode) {
+		this.thinkingMode = Objects.requireNonNull(thinkingMode);
+	}
+
+	/** Get the current thinking mode. */
+	public ThinkingMode getThinkingMode() {
+		return thinkingMode;
 	}
 
 	public void write(Supplier<String> role, String message) {
@@ -33,7 +46,7 @@ public class LlamaCppInstructProcessor extends LlamaCppBatchProcessor {
 
 	public void write(LlamaCppChatMessage message) {
 		Objects.requireNonNull(message);
-		String prompt = getModel().formatChatMessages(message);
+		String prompt = getModel().formatChatMessages(java.util.Collections.singletonList(message), thinkingMode);
 		writeFormatted(prompt);
 	}
 

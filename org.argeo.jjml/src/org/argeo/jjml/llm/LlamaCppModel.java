@@ -24,6 +24,7 @@ import java.util.function.LongSupplier;
 import org.argeo.jjml.llm.params.ModelParam;
 import org.argeo.jjml.llm.params.ModelParams;
 import org.argeo.jjml.llm.util.InstructRole;
+import org.argeo.jjml.llm.util.ThinkingMode;
 
 /**
  * Access to a llama.cpp model. (see <code>llama_model</code>, in llama.h)
@@ -122,9 +123,115 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 		return formatChatMessages(Arrays.asList(messages));
 	}
 
+	/**
+	 * Format chat messages. When the model has a chat template, this uses the
+	 * Jinja2 engine with {@link ThinkingMode#AUTO}; otherwise falls back to the
+	 * legacy formatter.
+	 */
 	public String formatChatMessages(List<LlamaCppChatMessage> messages) {
+		return formatChatMessages(messages, ThinkingMode.AUTO);
+	}
+
+	/**
+	 * Format chat messages with the given thinking mode. When the model has a
+	 * chat template, this uses the Jinja2 engine; otherwise falls back to the
+	 * legacy formatter (which ignores thinking mode).
+	 *
+	 * @param messages    the chat messages
+	 * @param thinkingMode controls thinking/reasoning mode
+	 */
+	public String formatChatMessages(List<LlamaCppChatMessage> messages, ThinkingMode thinkingMode) {
+		if (chatTemplate != null) {
+			boolean enableThinking = resolveEnableThinking(thinkingMode);
+			return LLamaCppNativeChatFormatter.formatChatMessagesJinja(pointer, messages, true, chatTemplate,
+					enableThinking, null);
+		}
+		// fallback: no chat template in model metadata, use legacy
 		return LLamaCppNativeChatFormatter.formatChatMessages(messages, //
 				(message) -> message.getRole().equals(InstructRole.USER.get()), chatTemplate);
+	}
+
+	/**
+	 * Format chat messages using Jinja2 template engine, with full control over
+	 * template parameters.
+	 *
+	 * @param messages           the chat messages
+	 * @param addGenerationPrompt whether to add the generation prompt
+	 * @param thinkingMode       controls thinking/reasoning mode
+	 * @return the formatted prompt string
+	 */
+	public String formatChatMessagesJinja(List<LlamaCppChatMessage> messages, boolean addGenerationPrompt,
+			ThinkingMode thinkingMode) {
+		return formatChatMessagesJinja(messages, addGenerationPrompt, thinkingMode, null);
+	}
+
+	/**
+	 * Format chat messages using Jinja2 template engine.
+	 *
+	 * @param messages           the chat messages
+	 * @param addGenerationPrompt whether to add the generation prompt
+	 * @param enableThinking     whether to enable thinking/reasoning mode
+	 * @return the formatted prompt string
+	 */
+	public String formatChatMessagesJinja(List<LlamaCppChatMessage> messages, boolean addGenerationPrompt,
+			boolean enableThinking) {
+		return formatChatMessagesJinja(messages, addGenerationPrompt,
+				enableThinking ? ThinkingMode.ENABLED : ThinkingMode.DISABLED, null);
+	}
+
+	/**
+	 * Format chat messages using Jinja2 template engine, with full control over
+	 * template parameters.
+	 *
+	 * @param messages           the chat messages
+	 * @param addGenerationPrompt whether to add the generation prompt
+	 * @param thinkingMode       controls thinking/reasoning mode
+	 * @param chatTemplateKwargs additional key-value pairs passed to the Jinja2
+	 *                           template
+	 * @return the formatted prompt string
+	 */
+	public String formatChatMessagesJinja(List<LlamaCppChatMessage> messages, boolean addGenerationPrompt,
+			ThinkingMode thinkingMode, Map<String, String> chatTemplateKwargs) {
+		boolean enableThinking = resolveEnableThinking(thinkingMode);
+		return LLamaCppNativeChatFormatter.formatChatMessagesJinja(pointer, messages, addGenerationPrompt,
+				chatTemplate, enableThinking, chatTemplateKwargs);
+	}
+
+	/**
+	 * Format chat messages using Jinja2 template engine, with full control over
+	 * template parameters.
+	 *
+	 * @param messages           the chat messages
+	 * @param addGenerationPrompt whether to add the generation prompt
+	 * @param enableThinking     whether to enable thinking/reasoning mode
+	 * @param chatTemplateKwargs additional key-value pairs passed to the Jinja2
+	 *                           template
+	 * @return the formatted prompt string
+	 */
+	public String formatChatMessagesJinja(List<LlamaCppChatMessage> messages, boolean addGenerationPrompt,
+			boolean enableThinking, Map<String, String> chatTemplateKwargs) {
+		return formatChatMessagesJinja(messages, addGenerationPrompt,
+				enableThinking ? ThinkingMode.ENABLED : ThinkingMode.DISABLED, chatTemplateKwargs);
+	}
+
+	/**
+	 * Resolve the effective enable_thinking flag from the given thinking mode.
+	 */
+	private boolean resolveEnableThinking(ThinkingMode thinkingMode) {
+		return switch (Objects.requireNonNull(thinkingMode)) {
+		case ENABLED -> true;
+		case DISABLED -> false;
+		case AUTO -> supportsEnableThinking();
+		};
+	}
+
+	/**
+	 * Check if this model's chat template supports enable_thinking.
+	 *
+	 * @return true if the template supports enable_thinking
+	 */
+	public boolean supportsEnableThinking() {
+		return LLamaCppNativeChatFormatter.supportsEnableThinking(pointer, chatTemplate);
 	}
 
 	/*

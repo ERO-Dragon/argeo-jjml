@@ -14,10 +14,16 @@ add_library(${TARGET} SHARED
 )
 
 if(ggml_FOUND)
-target_link_libraries(${TARGET} PRIVATE	ggml::ggml ggml::ggml-base llama)
+target_link_libraries(${TARGET} PRIVATE	ggml::ggml ggml::ggml-base llama common)
 else()
-target_link_libraries(${TARGET} PRIVATE	ggml ggml-base llama)
+target_link_libraries(${TARGET} PRIVATE	ggml ggml-base llama common)
 endif()
+
+# Include llama.cpp common/ directory for Jinja2 chat template support
+target_include_directories(${TARGET} PRIVATE
+	${CMAKE_SOURCE_DIR}/tp/llama.cpp/common
+	${CMAKE_SOURCE_DIR}/tp/llama.cpp/vendor
+)
 
 # When breaking changes are not functionally critical
 # we keep building against older, in order to extend the life
