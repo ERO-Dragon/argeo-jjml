@@ -32,11 +32,17 @@ public class LlamaCppBackend {
 
 	static native ContextParams newContextParams();
 
+	private static native LlamaCppDevice[] doGetDevices();
+
 	public static native boolean supportsMmap();
 
 	public static native boolean supportsMlock();
 
 	public static native boolean supportsGpuOffload();
+
+	public static LlamaCppDevice[] getDevices() {
+		return doGetDevices();
+	}
 
 	/*
 	 * LIFECYCLE

@@ -3,6 +3,7 @@ package org.argeo.jjml.llm.params;
 /** Names of the supported model parameters. */
 public enum ModelParam {
 	n_gpu_layers, //
+	device, //
 	vocab_only, //
 	use_mmap, //
 	use_mlock, //

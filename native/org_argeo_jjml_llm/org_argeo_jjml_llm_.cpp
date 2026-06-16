@@ -31,6 +31,7 @@ jmethodID LlamaCppJavaSampler__reset;
  */
 jmethodID ModelParams__init;
 jmethodID ContextParams__init;
+jmethodID LlamaCppDevice__init;
 
 /*
  * LOCAL
@@ -78,10 +79,13 @@ static void org_argeo_jjml_llm_(JNIEnv *env) {
 	// We define the constructors here so that they fail right away when signatures change
 	jclass ModelParams = argeo::jni::find_jclass(env, JCLASS_MODEL_PARAMS);
 	ModelParams__init = argeo::jni::jmethod_id(env, ModelParams, //
-			"<init>", "(IZZZ)V");
+			"<init>", "(ILjava/lang/String;ZZZ)V");
 	jclass ContextParams = argeo::jni::find_jclass(env, JCLASS_CONTEXT_PARAMS);
 	ContextParams__init = argeo::jni::jmethod_id(env, ContextParams, //
 			"<init>", "(IIIIIIIIIFFFFFFIFIIZZZZZZZ)V");
+	jclass LlamaCppDevice = argeo::jni::find_jclass(env, JCLASS_DEVICE);
+	LlamaCppDevice__init = argeo::jni::jmethod_id(env, LlamaCppDevice, //
+			"<init>", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IJJ)V");
 	// Tip: in order to find a constructor signature, use:
 	// javap -s '../org.argeo.jjml/bin/org/argeo/jjml/llama/params/ContextParams.class'
 }

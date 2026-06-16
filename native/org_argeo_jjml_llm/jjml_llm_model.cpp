@@ -1,6 +1,8 @@
 #include <stddef.h>
 #include <functional>
 #include <iostream>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -34,6 +36,52 @@ static void get_model_params(JNIEnv *env, jobject params,
 			env->GetMethodID(clss, "use_mlock", "()Z"));
 }
 
+static ggml_backend_dev_t jjml_llm_find_device(const std::string &device_selector) {
+	if (device_selector.empty())
+		return nullptr;
+
+	if (device_selector[0] == '#') {
+		if (device_selector.length() == 1)
+			return nullptr;
+		size_t pos = 0;
+		size_t index;
+		try {
+			index = static_cast<size_t>(std::stoul(device_selector.substr(1), &pos));
+		} catch (const std::exception&) {
+			return nullptr;
+		}
+		if (pos != device_selector.length() - 1)
+			return nullptr;
+		if (index < ggml_backend_dev_count())
+			return ggml_backend_dev_get(index);
+		return nullptr;
+	}
+
+	for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+		ggml_backend_dev_t device = ggml_backend_dev_get(i);
+		if (device == nullptr)
+			continue;
+
+		ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(device);
+		const char *backend = reg != nullptr ? ggml_backend_reg_name(reg) : nullptr;
+		const char *name = ggml_backend_dev_name(device);
+		if (name != nullptr && device_selector == name)
+			return device;
+		if (backend != nullptr && name != nullptr
+				&& device_selector == std::string(backend) + ":" + name)
+			return device;
+
+		struct ggml_backend_dev_props props;
+		ggml_backend_dev_get_props(device, &props);
+		if (props.device_id != nullptr && device_selector == props.device_id)
+			return device;
+		if (props.description != nullptr && device_selector == props.description)
+			return device;
+	}
+
+	return nullptr;
+}
+
 JNIEXPORT jobject JNICALL Java_org_argeo_jjml_llm_LlamaCppBackend_newModelParams(
 		JNIEnv *env, jclass) {
 	llama_model_params mparams = llama_model_default_params();
@@ -42,6 +90,7 @@ JNIEXPORT jobject JNICALL Java_org_argeo_jjml_llm_LlamaCppBackend_newModelParams
 			argeo::jni::find_jclass(env, JCLASS_MODEL_PARAMS), //
 			ModelParams__init, //
 			mparams.n_gpu_layers, //
+			nullptr, //
 			mparams.vocab_only, //
 			mparams.use_mmap, //
 			mparams.use_mlock //
@@ -61,8 +110,32 @@ JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doInit(
 		llama_model_params mparams = llama_model_default_params();
 		get_model_params(env, modelParams, &mparams);
 
+		ggml_backend_load_all();
+
+		std::unique_ptr<ggml_backend_dev_t[]> selected_devices;
+		{
+			jclass clss = env->FindClass(JCLASS_MODEL_PARAMS.c_str());
+			jstring device = static_cast<jstring>(env->CallObjectMethod(modelParams,
+					env->GetMethodID(clss, "device", "()Ljava/lang/String;")));
+			if (device != nullptr) {
+				std::string device_selector = argeo::jni::to_string(env, device);
+				ggml_backend_dev_t selected = jjml_llm_find_device(device_selector);
+				env->DeleteLocalRef(device);
+				if (!device_selector.empty() && selected == nullptr)
+					throw std::invalid_argument(
+							"No ggml backend device matches '" + device_selector + "'");
+
+				if (selected != nullptr) {
+					selected_devices = std::make_unique<ggml_backend_dev_t[]>(2);
+					selected_devices[0] = selected;
+					selected_devices[1] = nullptr;
+					mparams.devices = selected_devices.get();
+				}
+			}
+		}
+
 		// progress callback
-		argeo::jni::java_callback progress_data;
+		argeo::jni::java_callback progress_data { };
 		if (progressCallback != nullptr) {
 			progress_data.callback = env->NewGlobalRef(progressCallback);
 			progress_data.method = DoublePredicate__test;
@@ -77,10 +150,12 @@ JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doInit(
 			};
 		}
 
-		ggml_backend_load_all();
 		llama_model *model = llama_model_load_from_file(path_model, mparams);
-		if (!model)
+		if (!model) {
+			if (progress_data.callback != nullptr)
+				env->DeleteGlobalRef(progress_data.callback);
 			throw std::runtime_error("Cannot load model");
+		}
 
 		// free callback global reference
 		if (progress_data.callback != nullptr)
@@ -89,9 +164,56 @@ JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doInit(
 		env->ReleaseStringUTFChars(localPath, path_model);
 		return (jlong) model;
 	} catch (const std::exception &ex) {
+		env->ReleaseStringUTFChars(localPath, path_model);
 		argeo::jni::throw_to_java(env, ex);
-		// TODO better free JNI resources in case of error
 		return 0;
+	}
+}
+
+JNIEXPORT jobjectArray JNICALL Java_org_argeo_jjml_llm_LlamaCppBackend_doGetDevices(
+		JNIEnv *env, jclass) {
+	try {
+		ggml_backend_load_all();
+
+		const jsize count = static_cast<jsize>(ggml_backend_dev_count());
+		jclass deviceClass = argeo::jni::find_jclass(env, JCLASS_DEVICE);
+		jobjectArray res = env->NewObjectArray(count, deviceClass, nullptr);
+
+		for (jsize i = 0; i < count; i++) {
+			ggml_backend_dev_t device = ggml_backend_dev_get(i);
+			struct ggml_backend_dev_props props;
+			ggml_backend_dev_get_props(device, &props);
+			ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(device);
+
+			jstring backend = env->NewStringUTF(
+					reg != nullptr && ggml_backend_reg_name(reg) != nullptr ?
+							ggml_backend_reg_name(reg) : "");
+			jstring name = env->NewStringUTF(
+					props.name != nullptr ? props.name : "");
+			jstring description = props.description != nullptr ?
+					env->NewStringUTF(props.description) : nullptr;
+			jstring deviceId = props.device_id != nullptr ?
+					env->NewStringUTF(props.device_id) : nullptr;
+
+			jobject deviceObj = env->NewObject(deviceClass, LlamaCppDevice__init, //
+					backend, name, description, deviceId, //
+					static_cast<jint>(props.type), //
+					static_cast<jlong>(props.memory_free), //
+					static_cast<jlong>(props.memory_total));
+
+			env->SetObjectArrayElement(res, i, deviceObj);
+
+			env->DeleteLocalRef(backend);
+			env->DeleteLocalRef(name);
+			if (description != nullptr)
+				env->DeleteLocalRef(description);
+			if (deviceId != nullptr)
+				env->DeleteLocalRef(deviceId);
+			env->DeleteLocalRef(deviceObj);
+		}
+		return res;
+	} catch (const std::exception &ex) {
+		return argeo::jni::throw_to_java(env, ex);
 	}
 }
 

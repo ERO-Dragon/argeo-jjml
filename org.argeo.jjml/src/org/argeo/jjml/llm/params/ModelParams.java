@@ -21,6 +21,7 @@ import org.argeo.jjml.llm.LlamaCppModel;
  */
 public class ModelParams {
 	private final int n_gpu_layers;
+	private final String device;
 	private final boolean vocab_only;
 	private final boolean use_mmap;
 	private final boolean use_mlock;
@@ -31,11 +32,13 @@ public class ModelParams {
 	 */
 	ModelParams( //
 			int n_gpu_layers, //
+			String device, //
 			boolean vocab_only, //
 			boolean use_mmap, //
 			boolean use_mlock //
 	) {
 		this.n_gpu_layers = n_gpu_layers;
+		this.device = device;
 		this.vocab_only = vocab_only;
 		this.use_mmap = use_mmap;
 		this.use_mlock = use_mlock;
@@ -50,6 +53,7 @@ public class ModelParams {
 	public ModelParams with(Map<ModelParam, String> p) {
 		return new ModelParams( //
 				parseInt(p.getOrDefault(ModelParam.n_gpu_layers, Integer.toString(this.n_gpu_layers))), //
+				p.getOrDefault(ModelParam.device, this.device), //
 				parseBoolean(p.getOrDefault(ModelParam.vocab_only, Boolean.toString(this.vocab_only))), //
 				parseBoolean(p.getOrDefault(ModelParam.use_mmap, Boolean.toString(this.use_mmap))), //
 				parseBoolean(p.getOrDefault(ModelParam.use_mlock, Boolean.toString(this.use_mlock))) //
@@ -60,12 +64,16 @@ public class ModelParams {
 		return n_gpu_layers;
 	}
 
+	public String device() {
+		return device;
+	}
+
 	public boolean vocab_only() {
 		return vocab_only;
 	}
 
 	public boolean use_mmap() {
-		return use_mlock;
+		return use_mmap;
 	}
 
 	public boolean use_mlock() {

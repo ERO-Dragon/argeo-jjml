@@ -5,7 +5,8 @@
 /build/
 /a2/
 /sdk.mk
-
+*.dll
+*.jar
 # CMake generated files in source
 CMakeCache.txt
 *.cmake
@@ -24,3 +25,5 @@ install_manifest.txt
 # Visual Studio
 /out/build
 /.vs
+
+LlamaDependencies/*

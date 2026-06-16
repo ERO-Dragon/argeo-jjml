@@ -13,6 +13,7 @@ const std::string JNI_PKG = "org/argeo/jjml/llm/";
 const std::string JCLASS_MODEL_PARAMS = JNI_PKG + "params/ModelParams";
 const std::string JCLASS_CONTEXT_PARAMS = JNI_PKG + "params/ContextParams";
 const std::string JCLASS_JAVA_SAMPLER = JNI_PKG + "LlamaCppJavaSampler";
+const std::string JCLASS_DEVICE = JNI_PKG + "LlamaCppDevice";
 
 // NOTE: Only standard Java or this package's classes should be cached,
 // as the class loader may change in a dynamic environment (such as OSGi).
@@ -38,5 +39,6 @@ extern jmethodID LlamaCppJavaSampler__reset;
  */
 extern jmethodID ModelParams__init;
 extern jmethodID ContextParams__init;
+extern jmethodID LlamaCppDevice__init;
 
 #endif
