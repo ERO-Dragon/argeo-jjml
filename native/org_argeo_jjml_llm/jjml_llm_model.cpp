@@ -118,7 +118,9 @@ JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doInit(
 			jstring device = static_cast<jstring>(env->CallObjectMethod(modelParams,
 					env->GetMethodID(clss, "device", "()Ljava/lang/String;")));
 			if (device != nullptr) {
-				std::string device_selector = argeo::jni::to_string(env, device);
+				const char *device_cstr = env->GetStringUTFChars(device, nullptr);
+				std::string device_selector(device_cstr);
+				env->ReleaseStringUTFChars(device, device_cstr);
 				ggml_backend_dev_t selected = jjml_llm_find_device(device_selector);
 				env->DeleteLocalRef(device);
 				if (!device_selector.empty() && selected == nullptr)
