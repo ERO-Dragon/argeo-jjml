@@ -1,3 +1,23 @@
+# JJML (llama.cpp Java bindings) - Vulkan Edition
+﻿
+This repository is a downstream fork of [argeo/argeo-jjml](https://github.com/argeo/argeo-jjml). 
+It features custom patches and full **Vulkan hardware acceleration**
+> ⚠️ **Note on Versioning**: This branch ([ERO-Dragon/argeo-jjml](https://github.com/ERO-Dragon/argeo-jjml/tree/EroDragon/jjml)) is explicitly checked out from an older upstream.
+﻿
+## 🚀 Key Enhancements in this Fork
+
+- **Adapt to Chat Template**: Modified the internal Java/JNI template rendering pipeline to support runtime keyword arguments (`kwargs`).
+- **Dynamic Reasoning/Thinking Control**: Natively exposes and parses template-specific flags like `enable_thinking=False` during the template execution phase.
+- **Vulkan Hardware Acceleration**: Recompiled the underlying native C++ layer with full Vulkan flags enabled (`GGML_VULKAN=ON`).
+
+## ⚖️ LGPL-2.1 Open-Source Compliance
+
+This repository remains strictly under the GNU Lesser General Public License v2.1 (LGPL-2.1). All custom modifications to the Java classes, tokenizer template logic, and dynamic argument mapping are fully open, auditable, and tracked transparently within this repository's Git history and branches.
+
+## 📦 Original Upstream Documentation
+
+Below is the original documentation from the upstream project argeo/argeo-jjml, including original architecture notes and build instructions.
+
 # Enterprise-grade Java bindings for the ggml ecosystem ###
 
 ## Generative AI locally, integrated into existing Java systems ##
