@@ -38,6 +38,18 @@ public class GgmlBackend {
 
 	private static native void doLoadAllBackends(byte[] basePath);
 
+	static native boolean doIsVulkanSchedulerSupported();
+
+	static native boolean doSetVulkanSchedulerParams(boolean enabled, boolean paused, boolean abortRequested,
+			int maxNodesPerChunk, long maxMatmulBytesPerChunk, int timeWindowUs, int activeWindowUs,
+			int maxChunksInFlight, int sleepGranularityUs);
+
+	static native long[] doGetVulkanSchedulerParams();
+
+	static native long[] doGetVulkanSchedulerStats();
+
+	static native boolean doResetVulkanSchedulerStats();
+
 	public static void loadAllBackends() {
 		List<Path> basePaths = new ArrayList<>();
 
