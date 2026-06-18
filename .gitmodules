@@ -9,7 +9,7 @@
 	url = https://github.com/ggml-org/llama.cpp.git
 [submodule "tp/native/ggml"]
 	path = native/tp/ggml
-	url = https://github.com/ggml-org/ggml.git
+	url = https://github.com/ERO-Dragon/ggml.git
 [submodule "native/tp/whisper.cpp"]
 	path = native/tp/whisper.cpp
 	url = https://github.com/ggml-org/whisper.cpp.git
