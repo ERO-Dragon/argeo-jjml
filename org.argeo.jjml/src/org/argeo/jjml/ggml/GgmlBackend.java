@@ -19,11 +19,8 @@ import java.util.List;
 public class GgmlBackend {
 //	private final static Logger logger = System.getLogger(GgmlBackend.class.getName());
 
-	/**
-	 * System property enabling an opt-in workaround for OBS' Vulkan capture layer.
-	 * This is intentionally not enabled by default.
-	 */
-	public final static String SYSTEM_PROPERTY_DISABLE_VULKAN_OBS_CAPTURE = "jjml.vulkan.disableObsCapture";
+	private final static String ENV_VK_LOADER_LAYERS_DISABLE = "VK_LOADER_LAYERS_DISABLE";
+	private final static String VK_LOADER_LAYERS_DISABLE_IMPLICIT = "~implicit~";
 
 	private final static String GGML_DL_PREFIX = "ggml-";
 	// FIXME currently unused
@@ -44,7 +41,7 @@ public class GgmlBackend {
 
 	private static native void doLoadAllBackends(byte[] basePath);
 
-	private static native boolean doDisableVulkanObsCapture();
+	private static native boolean doSetProcessEnvironment(byte[] name, byte[] value, boolean overwrite);
 
 	static native boolean doIsVulkanSchedulerSupported();
 
@@ -59,8 +56,6 @@ public class GgmlBackend {
 	static native boolean doResetVulkanSchedulerStats();
 
 	public static void loadAllBackends() {
-		applyVulkanLayerWorkarounds();
-
 		List<Path> basePaths = new ArrayList<>();
 
 		// First try the "standard" deployment paths, so that they can be overridden
@@ -138,19 +133,23 @@ public class GgmlBackend {
 		//
 //		logger.log(INFO, "Searching for ggml backends in: " + basePath);
 		// loadBackends(basePath);
-		if (lastRelevantPath != null)
+		if (lastRelevantPath != null) {
+			if (Files.exists(lastRelevantPath.resolve(backendLibraryName(StandardBackend.vulkan))))
+				applyVulkanLoaderPolicy();
 			doLoadAllBackends(filePathToNative(lastRelevantPath));
-		else
+		} else {
 			System.err.println("Could not find ggml backends in any of " + basePaths);
+		}
 		//
 	}
 
-	private static void applyVulkanLayerWorkarounds() {
-		if (!Boolean.getBoolean(SYSTEM_PROPERTY_DISABLE_VULKAN_OBS_CAPTURE))
-			return;
-		if (!doDisableVulkanObsCapture())
-			throw new IllegalStateException(
-					"Could not enable " + SYSTEM_PROPERTY_DISABLE_VULKAN_OBS_CAPTURE + " workaround.");
+	private static void applyVulkanLoaderPolicy() {
+		setProcessEnvironment(ENV_VK_LOADER_LAYERS_DISABLE, VK_LOADER_LAYERS_DISABLE_IMPLICIT);
+	}
+
+	private static void setProcessEnvironment(String name, String value) {
+		if (!doSetProcessEnvironment(stringToNative(name), stringToNative(value), true))
+			throw new IllegalStateException("Could not set process environment variable " + name + ".");
 	}
 
 	public String getName() {
@@ -175,15 +174,11 @@ public class GgmlBackend {
 				}
 			}
 
-			String dllName;
-			if (File.separatorChar == '\\')
-				dllName = GGML_DL_PREFIX + backendName.name() + ".dll";
-			else {
-				// FIXME deal with MacOS
-				dllName = "lib" + GGML_DL_PREFIX + backendName.name() + ".so";
-			}
+			String dllName = backendLibraryName(backendName);
 			Path backendPath = basePath.resolve(dllName);
 			if (Files.exists(backendPath)) {
+				if (StandardBackend.vulkan.equals(backendName))
+					applyVulkanLoaderPolicy();
 				long pointer = doLoadBackend(filePathToNative(backendPath));
 				if (pointer > 0) {
 					// TODO log it
@@ -196,8 +191,20 @@ public class GgmlBackend {
 		}
 	}
 
+	private static String backendLibraryName(StandardBackend backendName) {
+		if (File.separatorChar == '\\')
+			return GGML_DL_PREFIX + backendName.name() + ".dll";
+		// FIXME deal with MacOS
+		return "lib" + GGML_DL_PREFIX + backendName.name() + ".so";
+	}
+
 	/** Path as bytes, based on the OS native encoding. */
 	private static byte[] filePathToNative(Path path) {
 		return path.toString().getBytes(Charset.forName(System.getProperty("sun.jnu.encoding", "UTF-8")));
+	}
+
+	/** String as bytes, based on the OS native encoding. */
+	private static byte[] stringToNative(String value) {
+		return value.getBytes(Charset.forName(System.getProperty("sun.jnu.encoding", "UTF-8")));
 	}
 }

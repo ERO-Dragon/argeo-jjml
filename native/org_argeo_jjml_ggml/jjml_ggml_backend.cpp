@@ -75,6 +75,50 @@ bool has_vulkan_scheduler() {
 			&& find_vulkan_scheduler_proc(
 					"ggml_backend_vk_reset_scheduler_stats");
 }
+
+#ifdef _WIN32
+std::wstring utf8_to_wide(const std::string &value) {
+	if (value.empty())
+		return std::wstring();
+
+	int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+			value.c_str(), static_cast<int>(value.size()), nullptr, 0);
+	UINT code_page = CP_UTF8;
+	DWORD flags = MB_ERR_INVALID_CHARS;
+	if (size <= 0) {
+		code_page = CP_ACP;
+		flags = 0;
+		size = MultiByteToWideChar(CP_ACP, 0, value.c_str(),
+				static_cast<int>(value.size()), nullptr, 0);
+	}
+	if (size <= 0)
+		return std::wstring();
+
+	std::wstring wide(static_cast<size_t>(size), L'\0');
+	if (!MultiByteToWideChar(code_page, flags, value.c_str(),
+			static_cast<int>(value.size()), wide.data(), size))
+		return std::wstring();
+	return wide;
+}
+#endif
+
+bool set_process_environment(const std::string &name, const std::string &value,
+		bool overwrite) {
+	if (name.empty())
+		return false;
+	if (!overwrite && std::getenv(name.c_str()) != nullptr)
+		return true;
+#ifdef _WIN32
+	std::wstring wide_name = utf8_to_wide(name);
+	std::wstring wide_value = utf8_to_wide(value);
+	if (wide_name.empty())
+		return false;
+	return SetEnvironmentVariableW(wide_name.c_str(), wide_value.c_str()) ?
+			true : false;
+#else
+	return setenv(name.c_str(), value.c_str(), overwrite ? 1 : 0) == 0;
+#endif
+}
 }
 
 JNIEXPORT jlong JNICALL Java_org_argeo_jjml_ggml_GgmlBackend_doLoadBackend(
@@ -111,14 +155,13 @@ JNIEXPORT void JNICALL Java_org_argeo_jjml_ggml_GgmlBackend_doLoadAllBackends(
 #endif
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_org_argeo_jjml_ggml_GgmlBackend_doDisableVulkanObsCapture(
-		JNIEnv *, jclass) {
-#ifdef _WIN32
-	return SetEnvironmentVariableW(L"DISABLE_VULKAN_OBS_CAPTURE", L"1") ?
+extern "C" JNIEXPORT jboolean JNICALL Java_org_argeo_jjml_ggml_GgmlBackend_doSetProcessEnvironment(
+		JNIEnv *env, jclass, jbyteArray name, jbyteArray value,
+		jboolean overwrite) {
+	std::string n = argeo::jni::to_string(env, name);
+	std::string v = argeo::jni::to_string(env, value);
+	return set_process_environment(n, v, overwrite == JNI_TRUE) ?
 			JNI_TRUE : JNI_FALSE;
-#else
-	return JNI_FALSE;
-#endif
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_org_argeo_jjml_ggml_GgmlBackend_doIsVulkanSchedulerSupported(
