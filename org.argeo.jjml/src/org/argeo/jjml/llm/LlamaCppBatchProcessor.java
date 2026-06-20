@@ -161,7 +161,7 @@ public class LlamaCppBatchProcessor {
 		for (int i = 0; i < parallelCount; i++) {
 			IntBuffer toCopy = inputs.length == 1 ? inputs[0] : inputs[i];
 			toCopy.position(inputs.length == 1 ? offsets[0] : offsets[i]);
-			toCopy.limit(inputs.length == 1 ? offsets[0] + lengths[0] : offsets[i] + lengths[1]);
+			toCopy.limit(inputs.length == 1 ? offsets[0] + lengths[0] : offsets[i] + lengths[i]);
 			tokens[i].put(toCopy);
 		}
 

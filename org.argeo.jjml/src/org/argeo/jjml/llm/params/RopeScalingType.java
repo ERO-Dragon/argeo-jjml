@@ -11,6 +11,7 @@ public enum RopeScalingType implements IntSupplier {
 	LLAMA_ROPE_SCALING_TYPE_NONE(0), //
 	LLAMA_ROPE_SCALING_TYPE_LINEAR(1), //
 	LLAMA_ROPE_SCALING_TYPE_YARN(2), //
+	LLAMA_ROPE_SCALING_TYPE_LONGROPE(3), //
 	;
 
 	private int code;
@@ -28,6 +29,6 @@ public enum RopeScalingType implements IntSupplier {
 		for (RopeScalingType type : values())
 			if (type.code == code)
 				return type;
-		throw new IllegalArgumentException("Unkown pooling type code : " + code);
+		throw new IllegalArgumentException("Unknown rope scaling type code : " + code);
 	}
 }

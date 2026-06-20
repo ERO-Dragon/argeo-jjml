@@ -1,6 +1,8 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <memory>
+#include <stdexcept>
 
 #include <argeo/jni/argeo_jni.h>
 
@@ -21,99 +23,130 @@ JNIEXPORT jintArray JNICALL Java_org_argeo_jjml_mtmd_MtmdProcessor_doSingleTurn(
 		JNIEnv *env, jclass, jlong contextPointer, jlong samplerChainPointer,
 		jlong mtmdContextPointer, jbyteArray promptStr,
 		jobjectArray bitmapsArr) {
-	auto *ctx = argeo::jni::as_pointer<llama_context*>(contextPointer);
-	const llama_model *model = llama_get_model(ctx);
-	const llama_vocab *vocab = llama_model_get_vocab(model);
-	auto *smpl = argeo::jni::as_pointer<llama_sampler*>(samplerChainPointer);
-	auto *mtmd_ctx = argeo::jni::as_pointer<mtmd_context*>(mtmdContextPointer);
+	try {
+		auto *ctx = argeo::jni::as_pointer<llama_context*>(contextPointer);
+		auto *smpl = argeo::jni::as_pointer<llama_sampler*>(
+				samplerChainPointer);
+		auto *mtmd_ctx = argeo::jni::as_pointer<mtmd_context*>(
+				mtmdContextPointer);
+		if (ctx == nullptr)
+			throw std::invalid_argument("Llama context pointer is null");
+		if (smpl == nullptr)
+			throw std::invalid_argument("Sampler chain pointer is null");
+		if (mtmd_ctx == nullptr)
+			throw std::invalid_argument("MTMD context pointer is null");
 
-	std::string prompt = argeo::jni::to_string(env, promptStr);
+		const llama_model *model = llama_get_model(ctx);
+		const llama_vocab *vocab = llama_model_get_vocab(model);
+
+		std::string prompt = argeo::jni::to_string(env, promptStr);
 //	std::cout << prompt << std::endl;
 
-	mtmd_input_text text;
-	text.text = prompt.c_str();
-	text.add_special = true;
-	text.parse_special = true;
+		mtmd_input_text text;
+		text.text = prompt.c_str();
+		text.add_special = true;
+		text.parse_special = true;
 
 //	std::cout << text.text << std::endl;
 
-	size_t n_bitmaps = env->GetArrayLength(bitmapsArr);
-	std::vector<const mtmd_bitmap*> bitmaps(n_bitmaps);
-	for (int i = 0; i < n_bitmaps; i++) {
-		jobject bitmapObj = env->GetObjectArrayElement(bitmapsArr, i);
-		mtmd_bitmap *bitmap = argeo::jni::as_pointer<mtmd_bitmap*>(env,
-				bitmapObj);
-		bitmaps[i] = bitmap;
-	}
-
-	// Tokenize
-
-	//std::cout << "# MTMD - Tokenize" << std::endl;
-	mtmd_input_chunks *input_chunks = mtmd_input_chunks_init();
-	const mtmd_bitmap **bitmaps_data = bitmaps.data();
-	int tokenize_res = mtmd_tokenize(mtmd_ctx, input_chunks, &text,
-			bitmaps_data, n_bitmaps);
-	if (tokenize_res != 0)
-		return nullptr; // FIXME throw exception
-
-	// Evaluate
-
-	//std::cout << "# MTMD - Evaluate" << std::endl;
-	// FIXME deal with position properly
-	llama_pos n_past = 0;
-	// FIXME get n_batch from parameters
-	int32_t n_batch = 256;
-
-	llama_pos new_n_past;
-	if (jjml_mtmd_eval_chunks(mtmd_ctx, ctx, // lctx
-			input_chunks, // chunks
-			n_past, // n_past
-			0, // seq_id
-			n_batch, // n_batch
-			true, // logits_last
-			&new_n_past)) {
-		return nullptr; // TOD throw exception
-	}
-
-	n_past = new_n_past;
-
-	// Generate response
-	//std::cout << "# MTMD - Generate Response" << std::endl;
-	llama_batch batch = llama_batch_init(1, 0, 1);
-	int n_predict = 1000; // FIXME
-	std::vector<llama_token> generated_tokens;
-	for (int i = 0; i < n_predict; i++) {
-		if (i > n_predict) {
-			break;
+		size_t n_bitmaps = bitmapsArr != nullptr ? env->GetArrayLength(
+				bitmapsArr) : 0;
+		std::vector<const mtmd_bitmap*> bitmaps(n_bitmaps);
+		for (int i = 0; i < n_bitmaps; i++) {
+			jobject bitmapObj = env->GetObjectArrayElement(bitmapsArr, i);
+			mtmd_bitmap *bitmap = argeo::jni::as_pointer<mtmd_bitmap*>(env,
+					bitmapObj);
+			if (bitmap == nullptr)
+				throw std::invalid_argument("MTMD bitmap pointer is null");
+			bitmaps[i] = bitmap;
+			env->DeleteLocalRef(bitmapObj);
 		}
 
-		llama_token token_id = llama_sampler_sample(smpl, ctx, -1);
-		generated_tokens.push_back(token_id);
+		// Tokenize
+
+		//std::cout << "# MTMD - Tokenize" << std::endl;
+		std::unique_ptr<mtmd_input_chunks,
+				decltype(&mtmd_input_chunks_free)> input_chunks(
+				mtmd_input_chunks_init(), mtmd_input_chunks_free);
+		if (input_chunks == nullptr)
+			throw std::runtime_error("Failed to allocate MTMD input chunks");
+		const mtmd_bitmap **bitmaps_data = bitmaps.empty() ? nullptr
+				: bitmaps.data();
+		int tokenize_res = mtmd_tokenize(mtmd_ctx, input_chunks.get(), &text,
+				bitmaps_data, n_bitmaps);
+		if (tokenize_res != 0)
+			throw std::runtime_error(
+					"MTMD tokenization failed with code "
+							+ std::to_string(tokenize_res));
+
+		// Evaluate
+
+		//std::cout << "# MTMD - Evaluate" << std::endl;
+		// FIXME deal with position properly
+		llama_pos n_past = 0;
+		// FIXME get n_batch from parameters
+		int32_t n_batch = 256;
+
+		llama_pos new_n_past;
+		int32_t eval_res = jjml_mtmd_eval_chunks(mtmd_ctx, ctx, // lctx
+				input_chunks.get(), // chunks
+				n_past, // n_past
+				0, // seq_id
+				n_batch, // n_batch
+				true, // logits_last
+				&new_n_past);
+		if (eval_res != 0)
+			throw std::runtime_error(
+					"MTMD evaluation failed with code "
+							+ std::to_string(eval_res));
+
+		n_past = new_n_past;
+
+		// Generate response
+		//std::cout << "# MTMD - Generate Response" << std::endl;
+		llama_batch batch = llama_batch_init(1, 0, 1);
+		int n_predict = 1000; // FIXME
+		std::vector<llama_token> generated_tokens;
+		for (int i = 0; i < n_predict; i++) {
+			if (i > n_predict) {
+				break;
+			}
+
+			llama_token token_id = llama_sampler_sample(smpl, ctx, -1);
+			generated_tokens.push_back(token_id);
 //        common_sampler_accept(ctx.smpl, token_id, true);
 
-		if (llama_vocab_is_eog(vocab, token_id)) {
-			break; // end of generation
-		}
+			if (llama_vocab_is_eog(vocab, token_id)) {
+				break; // end of generation
+			}
 
 //		LOG("%s", common_token_to_piece(ctx.lctx, token_id).c_str());
 //		fflush(stdout);
 
-		// eval the token
-		jjml_mtmd_batch_clear(batch);
-		jjml_mtmd_batch_add(batch, token_id, n_past++, { 0 }, true);
-		if (llama_decode(ctx, batch)) {
-			// TODO throw exception
+			// eval the token
+			jjml_mtmd_batch_clear(batch);
+			jjml_mtmd_batch_add(batch, token_id, n_past++, { 0 }, true);
+			int decode_res = llama_decode(ctx, batch);
+			if (decode_res != 0) {
+				llama_batch_free(batch);
+				throw std::runtime_error(
+						"llama_decode failed during MTMD generation with code "
+								+ std::to_string(decode_res));
+			}
 		}
+		llama_batch_free(batch);
+
+		jintArray res = nullptr;
+		res = env->NewIntArray(generated_tokens.size());
+		jint *bytes = env->GetIntArrayElements(res, 0);
+		for (int i = 0; i < generated_tokens.size(); i++)
+			bytes[i] = generated_tokens[i];
+		env->ReleaseIntArrayElements(res, bytes, 0);
+
+		return res;
+	} catch (const std::exception &ex) {
+		return reinterpret_cast<jintArray>(argeo::jni::throw_to_java(env, ex));
 	}
-
-	jintArray res = nullptr;
-	res = env->NewIntArray(generated_tokens.size());
-	jint *bytes = env->GetIntArrayElements(res, 0);
-	for (int i = 0; i < generated_tokens.size(); i++)
-		bytes[i] = generated_tokens[i];
-	env->ReleaseIntArrayElements(res, bytes, 0);
-
-	return res;
 }
 
 /*

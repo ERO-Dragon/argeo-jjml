@@ -131,7 +131,7 @@ endif()
 
 # Force ISO C++
 if (MSVC)
-add_compile_options(/permissive-)
+add_compile_options(/permissive- /EHsc)
 else()
 add_compile_options(-pedantic-errors)
 endif()
@@ -143,5 +143,3 @@ add_subdirectory(org_argeo_jjml_llm)
 add_subdirectory(org_argeo_jjml_mtmd)
 
 add_subdirectory(org_argeo_jjml_whisper)
-
-                     

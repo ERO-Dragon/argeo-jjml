@@ -1,7 +1,10 @@
 #include <stddef.h>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <memory>
+#include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -19,21 +22,113 @@
 static const size_t META_BUFFER_SIZE = 1024;
 static const size_t META_BIG_BUFFER_SIZE = 20480;
 
+namespace {
+struct jjml_llm_model_state {
+	std::vector<float> tensor_split;
+};
+
+std::map<llama_model*, jjml_llm_model_state> model_states;
+std::mutex model_states_mutex;
+}
+
+static llama_split_mode jjml_llm_split_mode_from_int(jint value) {
+	switch (value) {
+	case LLAMA_SPLIT_MODE_NONE:
+		return LLAMA_SPLIT_MODE_NONE;
+	case LLAMA_SPLIT_MODE_LAYER:
+		return LLAMA_SPLIT_MODE_LAYER;
+	case LLAMA_SPLIT_MODE_ROW:
+		return LLAMA_SPLIT_MODE_ROW;
+	case LLAMA_SPLIT_MODE_TENSOR:
+		return LLAMA_SPLIT_MODE_TENSOR;
+	default:
+		throw std::invalid_argument(
+				"Invalid llama split mode value: " + std::to_string(value));
+	}
+}
+
+static std::vector<float> jjml_llm_parse_tensor_split(
+		const std::string &tensor_split) {
+	std::vector<float> result;
+	if (tensor_split.empty())
+		return result;
+
+	std::string token;
+	std::stringstream ss(tensor_split);
+	while (std::getline(ss, token, ',')) {
+		size_t slash = 0;
+		while ((slash = token.find('/')) != std::string::npos) {
+			if (slash > 0)
+				result.push_back(std::stof(token.substr(0, slash)));
+			token.erase(0, slash + 1);
+		}
+		if (!token.empty())
+			result.push_back(std::stof(token));
+	}
+
+	if (result.size() >= llama_max_devices())
+		throw std::invalid_argument(
+				"Tensor split has " + std::to_string(result.size())
+						+ " entries, but llama.cpp supports "
+						+ std::to_string(llama_max_devices()) + " devices");
+	return result;
+}
+
+static void jjml_llm_keep_model_state(llama_model *model,
+		jjml_llm_model_state &&state) {
+	if (!state.tensor_split.empty()) {
+		std::lock_guard<std::mutex> lock(model_states_mutex);
+		model_states.emplace(model, std::move(state));
+	}
+}
+
+static void jjml_llm_drop_model_state(llama_model *model) {
+	std::lock_guard<std::mutex> lock(model_states_mutex);
+	model_states.erase(model);
+}
+
 /*
  * PARAMETERS
  */
 /** @brief Get model parameters from Java to native.*/
 static void get_model_params(JNIEnv *env, jobject params,
-		llama_model_params *mparams) {
+		llama_model_params *mparams, jjml_llm_model_state &model_state) {
 	jclass clss = env->FindClass(JCLASS_MODEL_PARAMS.c_str());
 	mparams->n_gpu_layers = env->CallIntMethod(params,
 			env->GetMethodID(clss, "n_gpu_layers", "()I"));
+	mparams->split_mode = jjml_llm_split_mode_from_int(env->CallIntMethod(params,
+			env->GetMethodID(clss, "split_mode", "()I")));
+	mparams->main_gpu = env->CallIntMethod(params,
+			env->GetMethodID(clss, "main_gpu", "()I"));
+
+	jstring tensor_split_string = static_cast<jstring>(env->CallObjectMethod(
+			params, env->GetMethodID(clss, "tensor_split", "()Ljava/lang/String;")));
+	if (tensor_split_string != nullptr) {
+		const char *tensor_split_cstr = env->GetStringUTFChars(
+				tensor_split_string, nullptr);
+		model_state.tensor_split = jjml_llm_parse_tensor_split(tensor_split_cstr);
+		env->ReleaseStringUTFChars(tensor_split_string, tensor_split_cstr);
+		env->DeleteLocalRef(tensor_split_string);
+		if (!model_state.tensor_split.empty())
+			mparams->tensor_split = model_state.tensor_split.data();
+	}
+
 	mparams->vocab_only = env->CallBooleanMethod(params,
 			env->GetMethodID(clss, "vocab_only", "()Z"));
 	mparams->use_mmap = env->CallBooleanMethod(params,
 			env->GetMethodID(clss, "use_mmap", "()Z"));
+	mparams->use_direct_io = env->CallBooleanMethod(params,
+			env->GetMethodID(clss, "use_direct_io", "()Z"));
 	mparams->use_mlock = env->CallBooleanMethod(params,
 			env->GetMethodID(clss, "use_mlock", "()Z"));
+	mparams->check_tensors = env->CallBooleanMethod(params,
+			env->GetMethodID(clss, "check_tensors", "()Z"));
+	mparams->use_extra_bufts = env->CallBooleanMethod(params,
+			env->GetMethodID(clss, "use_extra_bufts", "()Z"));
+	mparams->no_host = env->CallBooleanMethod(params,
+			env->GetMethodID(clss, "no_host", "()Z"));
+	mparams->no_alloc = env->CallBooleanMethod(params,
+			env->GetMethodID(clss, "no_alloc", "()Z"));
 }
 
 static ggml_backend_dev_t jjml_llm_find_device(const std::string &device_selector) {
@@ -91,9 +186,17 @@ JNIEXPORT jobject JNICALL Java_org_argeo_jjml_llm_LlamaCppBackend_newModelParams
 			ModelParams__init, //
 			mparams.n_gpu_layers, //
 			nullptr, //
+			mparams.split_mode, //
+			mparams.main_gpu, //
+			nullptr, //
 			mparams.vocab_only, //
 			mparams.use_mmap, //
-			mparams.use_mlock //
+			mparams.use_direct_io, //
+			mparams.use_mlock, //
+			mparams.check_tensors, //
+			mparams.use_extra_bufts, //
+			mparams.no_host, //
+			mparams.no_alloc //
 			);
 	//set_model_params(env, res, default_mparams);
 	return res;
@@ -108,7 +211,8 @@ JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doInit(
 	const char *path_model = env->GetStringUTFChars(localPath, nullptr);
 	try {
 		llama_model_params mparams = llama_model_default_params();
-		get_model_params(env, modelParams, &mparams);
+		jjml_llm_model_state model_state;
+		get_model_params(env, modelParams, &mparams, model_state);
 
 		ggml_backend_load_all();
 
@@ -158,6 +262,7 @@ JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doInit(
 				env->DeleteGlobalRef(progress_data.callback);
 			throw std::runtime_error("Cannot load model");
 		}
+		jjml_llm_keep_model_state(model, std::move(model_state));
 
 		// free callback global reference
 		if (progress_data.callback != nullptr)
@@ -222,6 +327,7 @@ JNIEXPORT jobjectArray JNICALL Java_org_argeo_jjml_llm_LlamaCppBackend_doGetDevi
 JNIEXPORT void JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doDestroy(
 		JNIEnv *env, jobject obj) {
 	auto *model = argeo::jni::as_pointer<llama_model*>(env, obj);
+	jjml_llm_drop_model_state(model);
 	llama_model_free(model);
 }
 

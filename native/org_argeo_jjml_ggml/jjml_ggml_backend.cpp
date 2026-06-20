@@ -1,4 +1,6 @@
 #include <cstdint>
+#include <cstdlib>
+#include <iostream>
 #include <string>
 
 #include <ggml-backend.h>
@@ -6,6 +8,11 @@
 #include <argeo/jni/argeo_jni.h>
 
 #include "org_argeo_jjml_ggml_GgmlBackend.h" // IWYU pragma: keep
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 namespace {
 struct ggml_vk_scheduler_params {
@@ -41,6 +48,11 @@ using ggml_backend_vk_get_scheduler_stats_t = void (*)(
 		ggml_vk_scheduler_stats *);
 using ggml_backend_vk_reset_scheduler_stats_t = void (*)();
 
+bool is_backend_debug_enabled() {
+	const char *value = std::getenv("JJML_GGML_BACKEND_DEBUG");
+	return value && value[0] && value[0] != '0';
+}
+
 void *find_vulkan_scheduler_proc(const char *name) {
 	ggml_backend_reg_t reg = ggml_backend_reg_by_name("Vulkan");
 	if (!reg)
@@ -69,7 +81,14 @@ JNIEXPORT jlong JNICALL Java_org_argeo_jjml_ggml_GgmlBackend_doLoadBackend(
 		JNIEnv *env, jclass, jbyteArray path) {
 	std::string p = argeo::jni::to_string(env, path);
 #ifdef GGML_BACKEND_DL
-	ggml_backend_load(p.c_str());
+	if (is_backend_debug_enabled())
+		std::cerr << "jjml: loading ggml backend " << p << std::endl;
+	ggml_backend_reg_t reg = ggml_backend_load(p.c_str());
+	if (is_backend_debug_enabled())
+		std::cerr << "jjml: loaded ggml backend "
+				<< (reg ? ggml_backend_reg_name(reg) : "<null>")
+				<< std::endl;
+	return reinterpret_cast<jlong>(reg);
 #else
 	// FIXME throw exception
 #endif
@@ -80,9 +99,25 @@ JNIEXPORT void JNICALL Java_org_argeo_jjml_ggml_GgmlBackend_doLoadAllBackends(
 		JNIEnv *env, jclass, jbyteArray basePath) {
 	std::string search_path = argeo::jni::to_string(env, basePath);
 #ifdef GGML_BACKEND_DL
+	if (is_backend_debug_enabled())
+		std::cerr << "jjml: loading all ggml backends from " << search_path
+				<< std::endl;
 	ggml_backend_load_all_from_path(search_path.c_str());
+	if (is_backend_debug_enabled())
+		std::cerr << "jjml: loaded all ggml backends from " << search_path
+				<< std::endl;
 #else
 	// FIXME throw exception
+#endif
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_org_argeo_jjml_ggml_GgmlBackend_doDisableVulkanObsCapture(
+		JNIEnv *, jclass) {
+#ifdef _WIN32
+	return SetEnvironmentVariableW(L"DISABLE_VULKAN_OBS_CAPTURE", L"1") ?
+			JNI_TRUE : JNI_FALSE;
+#else
+	return JNI_FALSE;
 #endif
 }
 

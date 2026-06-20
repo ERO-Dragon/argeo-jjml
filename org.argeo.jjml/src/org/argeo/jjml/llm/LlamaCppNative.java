@@ -89,9 +89,9 @@ public class LlamaCppNative {
 		});
 		Optional.ofNullable(System.getProperty(SYSTEM_PROPERTY_LIBPATH_JJML_GGML)).ifPresent((path) -> {
 			jjmlGgmlLibraryPath = Paths.get(path);
-			if (!Files.exists(jjmlLlmLibraryPath))
+			if (!Files.exists(jjmlGgmlLibraryPath))
 				throw new IllegalArgumentException(
-						SYSTEM_PROPERTY_LIBPATH_JJML_GGML + " " + jjmlLlmLibraryPath + " does not exist");
+						SYSTEM_PROPERTY_LIBPATH_JJML_GGML + " " + jjmlGgmlLibraryPath + " does not exist");
 		});
 
 		if (ggmlLibraryPath != null) {

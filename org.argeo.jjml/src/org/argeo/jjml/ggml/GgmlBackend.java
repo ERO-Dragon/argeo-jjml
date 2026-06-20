@@ -19,6 +19,12 @@ import java.util.List;
 public class GgmlBackend {
 //	private final static Logger logger = System.getLogger(GgmlBackend.class.getName());
 
+	/**
+	 * System property enabling an opt-in workaround for OBS' Vulkan capture layer.
+	 * This is intentionally not enabled by default.
+	 */
+	public final static String SYSTEM_PROPERTY_DISABLE_VULKAN_OBS_CAPTURE = "jjml.vulkan.disableObsCapture";
+
 	private final static String GGML_DL_PREFIX = "ggml-";
 	// FIXME currently unused
 	private final static List<GgmlBackend> loadedBackends = new ArrayList<>();
@@ -38,6 +44,8 @@ public class GgmlBackend {
 
 	private static native void doLoadAllBackends(byte[] basePath);
 
+	private static native boolean doDisableVulkanObsCapture();
+
 	static native boolean doIsVulkanSchedulerSupported();
 
 	static native boolean doSetVulkanSchedulerParams(boolean enabled, boolean paused, boolean abortRequested,
@@ -51,6 +59,8 @@ public class GgmlBackend {
 	static native boolean doResetVulkanSchedulerStats();
 
 	public static void loadAllBackends() {
+		applyVulkanLayerWorkarounds();
+
 		List<Path> basePaths = new ArrayList<>();
 
 		// First try the "standard" deployment paths, so that they can be overridden
@@ -133,6 +143,14 @@ public class GgmlBackend {
 		else
 			System.err.println("Could not find ggml backends in any of " + basePaths);
 		//
+	}
+
+	private static void applyVulkanLayerWorkarounds() {
+		if (!Boolean.getBoolean(SYSTEM_PROPERTY_DISABLE_VULKAN_OBS_CAPTURE))
+			return;
+		if (!doDisableVulkanObsCapture())
+			throw new IllegalStateException(
+					"Could not enable " + SYSTEM_PROPERTY_DISABLE_VULKAN_OBS_CAPTURE + " workaround.");
 	}
 
 	public String getName() {

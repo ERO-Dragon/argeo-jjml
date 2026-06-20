@@ -79,10 +79,10 @@ static void org_argeo_jjml_llm_(JNIEnv *env) {
 	// We define the constructors here so that they fail right away when signatures change
 	jclass ModelParams = argeo::jni::find_jclass(env, JCLASS_MODEL_PARAMS);
 	ModelParams__init = argeo::jni::jmethod_id(env, ModelParams, //
-			"<init>", "(ILjava/lang/String;ZZZ)V");
+			"<init>", "(ILjava/lang/String;IILjava/lang/String;ZZZZZZZZ)V");
 	jclass ContextParams = argeo::jni::find_jclass(env, JCLASS_CONTEXT_PARAMS);
 	ContextParams__init = argeo::jni::jmethod_id(env, ContextParams, //
-			"<init>", "(IIIIIIIIIFFFFFFIFIIZZZZZZZ)V");
+			"<init>", "(IIIIIIIIIIIIIFFFFFFIFIIZZZZZZ)V");
 	jclass LlamaCppDevice = argeo::jni::find_jclass(env, JCLASS_DEVICE);
 	LlamaCppDevice__init = argeo::jni::jmethod_id(env, LlamaCppDevice, //
 			"<init>", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IJJ)V");

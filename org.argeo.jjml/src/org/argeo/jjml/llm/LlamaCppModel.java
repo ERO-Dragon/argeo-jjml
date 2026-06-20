@@ -54,6 +54,7 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 	private final int embeddingSize;
 	private final int layerCount;
 	private final Map<String, String> metadata;
+	private final int mtpLayerCount;
 	private final String description;
 	private final long modelSize;
 	private final int endOfGenerationToken;
@@ -80,6 +81,7 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 			map.put(new String(keys[i], UTF_8), new String(values[i], UTF_8));
 		}
 		metadata = Collections.unmodifiableMap(map);
+		mtpLayerCount = resolveNextnPredictLayers(metadata);
 		if (metadata.containsKey("tokenizer.chat_template")) {
 			chatTemplate = metadata.get("tokenizer.chat_template");
 		}
@@ -293,6 +295,23 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 		return metadata;
 	}
 
+	/**
+	 * Return the model's static MTP layer count as declared in GGUF metadata.
+	 * <p>
+	 * This is a capability signal, not a runtime draft-window setting.
+	 */
+	public int getMtpLayerCount() {
+		return mtpLayerCount;
+	}
+
+	/**
+	 * Whether this model file exposes NextN/MTP metadata and can enter the MTP
+	 * speculative path.
+	 */
+	public boolean supportsMtp() {
+		return getMtpLayerCount() > 0;
+	}
+
 	public String getDescription() {
 		return description;
 	}
@@ -388,5 +407,33 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 //		if (initParams.use_mlock() && !LlamaCppBackend.supportsMlock())
 //			logger.log(WARNING,
 //					"mlock is not available, but " + ModelParam.use_mlock + " is set to " + initParams.use_mlock());
+	}
+
+	private static int resolveNextnPredictLayers(Map<String, String> metadata) {
+		String architecture = metadata.get("general.architecture");
+		if (architecture != null) {
+			int value = parseNonNegativeInt(metadata.get(architecture + ".nextn_predict_layers"));
+			if (value > 0)
+				return value;
+		}
+		for (Map.Entry<String, String> entry : metadata.entrySet()) {
+			if (entry.getKey().endsWith(".nextn_predict_layers")) {
+				int value = parseNonNegativeInt(entry.getValue());
+				if (value > 0)
+					return value;
+			}
+		}
+		return 0;
+	}
+
+	private static int parseNonNegativeInt(String value) {
+		if (value == null)
+			return 0;
+		try {
+			int parsed = Integer.parseInt(value.trim());
+			return Math.max(0, parsed);
+		} catch (NumberFormatException e) {
+			return 0;
+		}
 	}
 }

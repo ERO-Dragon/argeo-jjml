@@ -4,9 +4,17 @@ package org.argeo.jjml.llm.params;
 public enum ModelParam {
 	n_gpu_layers, //
 	device, //
+	split_mode, //
+	main_gpu, //
+	tensor_split, //
 	vocab_only, //
 	use_mmap, //
+	use_direct_io, //
 	use_mlock, //
+	check_tensors, //
+	use_extra_bufts, //
+	no_host, //
+	no_alloc, //
 	;
 
 	/**

@@ -10,13 +10,22 @@ add_library(${TARGET} SHARED
 	jjml_llm_sampling.cpp
 	jjml_llm_batch_write.cpp
 	jjml_llm_batch_read.cpp
+	jjml_llm_speculative.cpp
 	jjml_llm_embedding.cpp
 )
 
-if(ggml_FOUND)
-target_link_libraries(${TARGET} PRIVATE	ggml::ggml ggml::ggml-base llama common)
+if(TARGET llama-common)
+set(LLAMA_COMMON_TARGET llama-common)
+elseif(TARGET common)
+set(LLAMA_COMMON_TARGET common)
 else()
-target_link_libraries(${TARGET} PRIVATE	ggml ggml-base llama common)
+set(LLAMA_COMMON_TARGET common)
+endif()
+
+if(ggml_FOUND)
+target_link_libraries(${TARGET} PRIVATE	ggml::ggml ggml::ggml-base llama ${LLAMA_COMMON_TARGET})
+else()
+target_link_libraries(${TARGET} PRIVATE	ggml ggml-base llama ${LLAMA_COMMON_TARGET})
 endif()
 
 # Include llama.cpp common/ directory for Jinja2 chat template support

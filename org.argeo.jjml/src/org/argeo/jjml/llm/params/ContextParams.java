@@ -24,12 +24,16 @@ public class ContextParams { //
 	private final int n_batch; // logical maximum batch size that can be submitted to llama_decode
 	private final int n_ubatch; // physical maximum batch size
 	private final int n_seq_max; // max number of sequences (i.e. distinct states for recurrent models)
+	private final int n_rs_seq; // number of recurrent-state snapshots per seq for rollback
+	private final int n_outputs_max; // max outputs in a ubatch (0 = n_batch)
 	private final int n_threads; // number of threads to use for generation
 	private final int n_threads_batch; // number of threads to use for batch processing
 
+	private final int ctx_type; // context type, from `enum llama_context_type`
 	private final int rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`
 	private final int pooling_type; // whether to pool (sum) embedding results by sequence id
 	private final int attention_type; // attention type to use for embeddings
+	private final int flash_attn_type; // when to enable Flash Attention
 
 	// ref: https://github.com/ggerganov/llama.cpp/pull/2054
 	private final float rope_freq_base; // RoPE base frequency, 0 = from model
@@ -50,7 +54,6 @@ public class ContextParams { //
 	// false by default
 	private final boolean offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
 
-	private final boolean flash_attn; // whether to use flash attention [EXPERIMENTAL]
 	private final boolean no_perf; // whether to measure performance timings
 	private final boolean op_offload; // offload host tensor operations to device
 	private final boolean swa_full; // use full-size SWA cache
@@ -65,11 +68,15 @@ public class ContextParams { //
 			int n_batch, //
 			int n_ubatch, //
 			int n_seq_max, //
+			int n_rs_seq, //
+			int n_outputs_max, //
 			int n_threads, //
 			int n_threads_batch, //
+			int ctx_type, //
 			int rope_scaling_type, //
 			int pooling_type, //
 			int attention_type, //
+			int flash_attn_type, //
 			float rope_freq_base, //
 			float rope_freq_scale, //
 			float yarn_ext_factor, //
@@ -82,7 +89,6 @@ public class ContextParams { //
 			int type_v, //
 			boolean embeddings, //
 			boolean offload_kqv, //
-			boolean flash_attn, //
 			boolean no_perf, //
 			boolean op_offload, //
 			boolean swa_full, //
@@ -92,11 +98,15 @@ public class ContextParams { //
 		this.n_batch = n_batch;
 		this.n_ubatch = n_ubatch;
 		this.n_seq_max = n_seq_max;
+		this.n_rs_seq = n_rs_seq;
+		this.n_outputs_max = n_outputs_max;
 		this.n_threads = n_threads;
 		this.n_threads_batch = n_threads_batch;
+		this.ctx_type = ctx_type;
 		this.rope_scaling_type = rope_scaling_type;
 		this.pooling_type = pooling_type;
 		this.attention_type = attention_type;
+		this.flash_attn_type = flash_attn_type;
 		this.rope_freq_base = rope_freq_base;
 		this.rope_freq_scale = rope_freq_scale;
 		this.yarn_ext_factor = yarn_ext_factor;
@@ -109,7 +119,6 @@ public class ContextParams { //
 		this.type_v = type_v;
 		this.embeddings = embeddings;
 		this.offload_kqv = offload_kqv;
-		this.flash_attn = flash_attn;
 		this.no_perf = no_perf;
 		this.op_offload = op_offload;
 		this.swa_full = swa_full;
@@ -130,32 +139,41 @@ public class ContextParams { //
 	}
 
 	public ContextParams with(Map<ContextParam, String> p) {
+		int resolvedFlashAttnType = parseInt(
+				p.getOrDefault(ContextParam.flash_attn_type, Integer.toString(this.flash_attn_type)));
+		String legacyFlashAttn = p.get(ContextParam.flash_attn);
+		if (legacyFlashAttn != null)
+			resolvedFlashAttnType = parseBoolean(legacyFlashAttn) ? 1 : 0;
+
 		return new ContextParams( //
 				parseInt(p.getOrDefault(ContextParam.n_ctx, Integer.toString(this.n_ctx))), //
 				parseInt(p.getOrDefault(ContextParam.n_batch, Integer.toString(this.n_batch))), //
 				parseInt(p.getOrDefault(ContextParam.n_ubatch, Integer.toString(this.n_ubatch))), //
 				parseInt(p.getOrDefault(ContextParam.n_seq_max, Integer.toString(this.n_seq_max))), //
+				parseInt(p.getOrDefault(ContextParam.n_rs_seq, Integer.toString(this.n_rs_seq))), //
+				parseInt(p.getOrDefault(ContextParam.n_outputs_max, Integer.toString(this.n_outputs_max))), //
 				parseInt(p.getOrDefault(ContextParam.n_threads, Integer.toString(this.n_threads))), //
 				parseInt(p.getOrDefault(ContextParam.n_threads_batch, Integer.toString(this.n_threads_batch))), //
-				this.rope_scaling_type, //
+				parseInt(p.getOrDefault(ContextParam.ctx_type, Integer.toString(this.ctx_type))), //
+				parseInt(p.getOrDefault(ContextParam.rope_scaling_type, Integer.toString(this.rope_scaling_type))), //
 				parseInt(p.getOrDefault(ContextParam.pooling_type, Integer.toString(this.pooling_type))), //
-				this.attention_type, //
-				this.rope_freq_base, //
-				this.rope_freq_scale, //
-				this.yarn_ext_factor, //
-				this.yarn_attn_factor, //
-				this.yarn_beta_fast, //
-				this.yarn_beta_slow, //
-				this.yarn_orig_ctx, //
-				this.defrag_thold, //
+				parseInt(p.getOrDefault(ContextParam.attention_type, Integer.toString(this.attention_type))), //
+				resolvedFlashAttnType, //
+				Float.parseFloat(p.getOrDefault(ContextParam.rope_freq_base, Float.toString(this.rope_freq_base))), //
+				Float.parseFloat(p.getOrDefault(ContextParam.rope_freq_scale, Float.toString(this.rope_freq_scale))), //
+				Float.parseFloat(p.getOrDefault(ContextParam.yarn_ext_factor, Float.toString(this.yarn_ext_factor))), //
+				Float.parseFloat(p.getOrDefault(ContextParam.yarn_attn_factor, Float.toString(this.yarn_attn_factor))), //
+				Float.parseFloat(p.getOrDefault(ContextParam.yarn_beta_fast, Float.toString(this.yarn_beta_fast))), //
+				Float.parseFloat(p.getOrDefault(ContextParam.yarn_beta_slow, Float.toString(this.yarn_beta_slow))), //
+				parseInt(p.getOrDefault(ContextParam.yarn_orig_ctx, Integer.toString(this.yarn_orig_ctx))), //
+				Float.parseFloat(p.getOrDefault(ContextParam.defrag_thold, Float.toString(this.defrag_thold))), //
 				parseInt(p.getOrDefault(ContextParam.type_k, Integer.toString(this.type_k))), //
 				parseInt(p.getOrDefault(ContextParam.type_v, Integer.toString(this.type_v))), //
 				parseBoolean(p.getOrDefault(ContextParam.embeddings, Boolean.toString(this.embeddings))), //
 				parseBoolean(p.getOrDefault(ContextParam.offload_kqv, Boolean.toString(this.offload_kqv))), //
-				parseBoolean(p.getOrDefault(ContextParam.flash_attn, Boolean.toString(this.flash_attn))), //
-				this.no_perf, //
-				this.op_offload, //
-				this.swa_full, //
+				parseBoolean(p.getOrDefault(ContextParam.no_perf, Boolean.toString(this.no_perf))), //
+				parseBoolean(p.getOrDefault(ContextParam.op_offload, Boolean.toString(this.op_offload))), //
+				parseBoolean(p.getOrDefault(ContextParam.swa_full, Boolean.toString(this.swa_full))), //
 				parseBoolean(p.getOrDefault(ContextParam.kv_unified, Boolean.toString(this.kv_unified))) //
 		);
 	}
@@ -176,12 +194,24 @@ public class ContextParams { //
 		return n_seq_max;
 	}
 
+	public int n_rs_seq() {
+		return n_rs_seq;
+	}
+
+	public int n_outputs_max() {
+		return n_outputs_max;
+	}
+
 	public int n_threads() {
 		return n_threads;
 	}
 
 	public int n_threads_batch() {
 		return n_threads_batch;
+	}
+
+	public int ctx_type() {
+		return ctx_type;
 	}
 
 	public int rope_scaling_type() {
@@ -194,6 +224,10 @@ public class ContextParams { //
 
 	public int attention_type() {
 		return attention_type;
+	}
+
+	public int flash_attn_type() {
+		return flash_attn_type;
 	}
 
 	public float rope_freq_base() {
@@ -245,7 +279,7 @@ public class ContextParams { //
 	}
 
 	public boolean flash_attn() {
-		return flash_attn;
+		return flash_attn_type != 0;
 	}
 
 	public boolean no_perf() {

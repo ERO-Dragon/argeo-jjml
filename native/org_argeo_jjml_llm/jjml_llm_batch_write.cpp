@@ -156,7 +156,7 @@ static jint jjml_llm_batch_processor_write(llama_context *ctx,
 				throw std::runtime_error("Decode failed");
 		} catch (...) {
 			llama_batch_free(batch);
-			throw std::current_exception();
+			throw;
 		}
 		llama_batch_free(batch);
 	}
@@ -226,10 +226,6 @@ JNIEXPORT jint JNICALL Java_org_argeo_jjml_llm_LlamaCppBatchProcessor_doWriteArr
 			inputs[i] = nullptr;
 		}
 	}
-
-	jint *sequence_ids_arr = env->GetIntArrayElements(sequenceIds, nullptr);
-	//jint sequence_ids_arr[1];
-	//env->GetIntArrayRegion(sequenceIds, 0 , 1, sequence_ids_arr);
 
 	jint newPosition;
 	try {

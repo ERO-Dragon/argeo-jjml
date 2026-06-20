@@ -11,6 +11,7 @@ public enum PoolingType implements IntSupplier {
 	LLAMA_POOLING_TYPE_MEAN(1), //
 	LLAMA_POOLING_TYPE_CLS(2), //
 	LLAMA_POOLING_TYPE_LAST(3), //
+	LLAMA_POOLING_TYPE_RANK(4), //
 	;
 
 	private int code;
@@ -28,6 +29,6 @@ public enum PoolingType implements IntSupplier {
 		for (PoolingType type : values())
 			if (type.code == code)
 				return type;
-		throw new IllegalArgumentException("Unkown pooling type code : " + code);
+		throw new IllegalArgumentException("Unknown pooling type code : " + code);
 	}
 }
