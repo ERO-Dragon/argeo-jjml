@@ -6,7 +6,7 @@
 	url = ../argeo-include-jni
 [submodule "tp/native/llama.cpp"]
 	path = native/tp/llama.cpp
-	url = https://github.com/ggml-org/llama.cpp.git
+	url = https://github.com/ERO-Dragon/llama.cpp.git
 [submodule "tp/native/ggml"]
 	path = native/tp/ggml
 	url = https://github.com/ERO-Dragon/ggml.git

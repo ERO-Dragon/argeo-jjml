@@ -222,6 +222,27 @@ static void jjml_spec_batch_add(llama_batch &batch, llama_token id,
 	common_batch_add(batch, id, pos, { JJML_SPEC_SEQ_ID }, logits);
 }
 
+static void jjml_spec_validate_batch(const llama_batch &batch,
+		int32_t n_tokens_alloc, const char *usage) {
+	if (n_tokens_alloc <= 0)
+		throw std::runtime_error(
+				std::string("Invalid MTP batch capacity for ") + usage);
+	if (batch.token == nullptr || batch.pos == nullptr
+			|| batch.n_seq_id == nullptr || batch.seq_id == nullptr
+			|| batch.logits == nullptr) {
+		throw std::runtime_error(
+				std::string("Failed to allocate MTP token batch for ")
+						+ usage);
+	}
+	for (int32_t i = 0; i < n_tokens_alloc; ++i) {
+		if (batch.seq_id[i] == nullptr) {
+			throw std::runtime_error(
+					std::string("Failed to allocate MTP batch seq_id rows for ")
+							+ usage);
+		}
+	}
+}
+
 static void jjml_spec_decode_or_throw(llama_context *ctx,
 		const llama_batch &batch, common_speculative *spec) {
 	const int rc = llama_decode(ctx, batch);
@@ -292,7 +313,9 @@ static void jjml_spec_prefill(jjml_speculative_engine *engine,
 	engine->n_past = 0;
 	engine->has_eog = false;
 
-	const uint32_t n_batch = std::max<uint32_t>(1, llama_n_batch(engine->ctx_tgt));
+	const uint32_t n_batch = std::max<uint32_t>(1,
+			std::min<uint32_t>(llama_n_batch(engine->ctx_tgt),
+					llama_n_ubatch(engine->ctx_tgt)));
 	size_t pos = 0;
 	while (pos < tokens.size()) {
 		const size_t remaining = tokens.size() - pos;
@@ -300,6 +323,7 @@ static void jjml_spec_prefill(jjml_speculative_engine *engine,
 				std::min<size_t>(remaining, n_batch));
 		llama_batch batch = llama_batch_init(n_eval, 0, 1);
 		try {
+			jjml_spec_validate_batch(batch, n_eval, "prompt prefill");
 			for (int32_t i = 0; i < n_eval; ++i) {
 				const bool logits = pos + static_cast<size_t>(i)
 						== tokens.size() - 1;
@@ -407,6 +431,9 @@ static int jjml_spec_generate_with_sampler(jjml_speculative_engine *engine,
 		llama_batch batch = llama_batch_init(
 				static_cast<int32_t>(1 + draft.size()), 0, 1);
 		try {
+			jjml_spec_validate_batch(batch,
+					static_cast<int32_t>(1 + draft.size()),
+					"speculative verification");
 			jjml_spec_batch_add(batch, engine->id_last, engine->n_past,
 					true);
 			for (size_t i = 0; i < draft.size(); ++i) {
@@ -495,6 +522,7 @@ JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppSpeculativeProcessor_doI
 
 		common_params_speculative spec_params = jjml_spec_params_from_java(env,
 				params);
+		spec_params.draft.backend_sampling = false;
 
 		const llama_model *model_tgt = llama_get_model(ctx_tgt);
 		std::string nextn_key;

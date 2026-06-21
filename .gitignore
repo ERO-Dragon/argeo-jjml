@@ -19,7 +19,7 @@ core.*.dmp
 jitdump.*.dmp
 javacore.*.txt
 Snap.*.trc
-hs_err_pid*.log
+*.log
 install_manifest.txt
 
 # Visual Studio
@@ -27,3 +27,30 @@ install_manifest.txt
 /.vs
 
 LlamaDependencies/*
+
+# Local IDE metadata
+/.idea/
+*.iml
+
+# Local helper artifacts and generated logs
+/LlamaDependencies.zip
+/build-clean-header-only.log
+/build-v142-vulkan.bat
+/check_template.jsh
+/tmp-tests/
+
+# Accidental shell/command fragments created in the repository root
+/-DJAVA_HOME
+/-DJJML_DO_NOT_BUILD_TP
+/-Dggml_INCLUDE_DIR
+/-Dllama_INCLUDE_DIR
+/Checking
+/Get-ChildItem
+/Get-Content
+/GetStringUTFChars(javaString
+/Runtime.exec()
+/Select-String
+/cmake
+/dir
+/git
+/[{]
