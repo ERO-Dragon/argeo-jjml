@@ -298,32 +298,111 @@ static void jjml_spec_trace_emit(const jjml_speculative_engine *engine,
 			static_cast<int>(engine->n_past), engine->prompt.size());
 }
 
-static void jjml_spec_prefill(jjml_speculative_engine *engine,
-		llama_sampler *sampler, const llama_tokens &tokens) {
-	if (tokens.empty())
+static llama_tokens jjml_spec_tokens_from_java(JNIEnv *env,
+		jintArray promptTokens, jint offset, jint length) {
+	if (promptTokens == nullptr)
+		throw std::invalid_argument("Prompt token array is null");
+	if (offset < 0)
+		throw std::invalid_argument("Prompt token offset must not be negative");
+	if (length <= 0)
 		throw std::invalid_argument("Prompt token list is empty");
-	if ((uint32_t) tokens.size() >= llama_n_ctx(engine->ctx_tgt))
-		throw std::invalid_argument("Prompt exceeds the target context size");
 
+	const jsize array_length = env->GetArrayLength(promptTokens);
+	if (offset > array_length || length > array_length - offset)
+		throw std::invalid_argument("Prompt token range is outside the array");
+
+	jint *arr = env->GetIntArrayElements(promptTokens, nullptr);
+	if (arr == nullptr)
+		throw std::runtime_error("Failed to access prompt token array");
+
+	try {
+		llama_tokens tokens;
+		tokens.reserve(length);
+		for (int i = 0; i < length; ++i)
+			tokens.push_back(static_cast<llama_token>(arr[offset + i]));
+		env->ReleaseIntArrayElements(promptTokens, arr, JNI_ABORT);
+		return tokens;
+	} catch (...) {
+		env->ReleaseIntArrayElements(promptTokens, arr, JNI_ABORT);
+		throw;
+	}
+}
+
+static void jjml_spec_reset_begin_state(jjml_speculative_engine *engine) {
 	engine->prompt.clear();
 	engine->prompt.reserve(llama_n_ctx(engine->ctx_tgt));
 	engine->pending_output.clear();
 	engine->pending_output_origin.clear();
 	engine->id_last = LLAMA_TOKEN_NULL;
 	engine->n_past = 0;
+	engine->begun = false;
 	engine->has_eog = false;
+	engine->stats = jjml_speculative_stats {};
+}
+
+static void jjml_spec_prepare_target_for_replay(jjml_speculative_engine *engine,
+		size_t restored_token_count) {
+	const llama_pos pos_max = llama_memory_seq_pos_max(
+			llama_get_memory(engine->ctx_tgt), JJML_SPEC_SEQ_ID);
+	if (restored_token_count == 0) {
+		if (pos_max >= 0)
+			jjml_spec_seq_rm(engine->ctx_tgt, JJML_SPEC_SEQ_ID, 0, -1);
+		return;
+	}
+
+	const llama_pos restored_pos_max = static_cast<llama_pos>(
+			restored_token_count - 1);
+	if (pos_max < restored_pos_max) {
+		throw std::runtime_error(
+				"Restored target context ends at position "
+						+ std::to_string(pos_max) + ", expected at least "
+						+ std::to_string(restored_pos_max));
+	}
+	if (pos_max > restored_pos_max) {
+		jjml_spec_seq_rm(engine->ctx_tgt, JJML_SPEC_SEQ_ID,
+				static_cast<llama_pos>(restored_token_count), -1);
+	}
+}
+
+static void jjml_spec_prepare_draft_for_replay(jjml_speculative_engine *engine) {
+	const llama_pos pos_max = llama_memory_seq_pos_max(
+			llama_get_memory(engine->ctx_dft), JJML_SPEC_SEQ_ID);
+	if (pos_max >= 0)
+		jjml_spec_seq_rm(engine->ctx_dft, JJML_SPEC_SEQ_ID, 0, -1);
+}
+
+static void jjml_spec_begin_from_target_position(
+		jjml_speculative_engine *engine, llama_sampler *sampler,
+		const llama_tokens &tokens, size_t restored_token_count) {
+	if (engine == nullptr)
+		throw std::invalid_argument("Speculative engine pointer is null");
+	if (sampler == nullptr)
+		throw std::invalid_argument("Sampler chain pointer is null");
+	if (engine->begun)
+		throw std::runtime_error("Speculative generation has already begun");
+	if (tokens.empty())
+		throw std::invalid_argument("Prompt token list is empty");
+	if (restored_token_count >= tokens.size())
+		throw std::invalid_argument(
+				"restoredTokenCount must leave at least one token to replay");
+	if ((uint32_t) tokens.size() >= llama_n_ctx(engine->ctx_tgt))
+		throw std::invalid_argument("Prompt exceeds the target context size");
+
+	jjml_spec_reset_begin_state(engine);
+	jjml_spec_prepare_target_for_replay(engine, restored_token_count);
+	jjml_spec_prepare_draft_for_replay(engine);
 
 	const uint32_t n_batch = std::max<uint32_t>(1,
 			std::min<uint32_t>(llama_n_batch(engine->ctx_tgt),
 					llama_n_ubatch(engine->ctx_tgt)));
-	size_t pos = 0;
+	size_t pos = restored_token_count;
 	while (pos < tokens.size()) {
 		const size_t remaining = tokens.size() - pos;
 		const int32_t n_eval = static_cast<int32_t>(
 				std::min<size_t>(remaining, n_batch));
 		llama_batch batch = llama_batch_init(n_eval, 0, 1);
 		try {
-			jjml_spec_validate_batch(batch, n_eval, "prompt prefill");
+			jjml_spec_validate_batch(batch, n_eval, "prompt replay");
 			for (int32_t i = 0; i < n_eval; ++i) {
 				const bool logits = pos + static_cast<size_t>(i)
 						== tokens.size() - 1;
@@ -604,25 +683,30 @@ JNIEXPORT void JNICALL Java_org_argeo_jjml_llm_LlamaCppSpeculativeProcessor_doBe
 				obj);
 		auto *sampler = argeo::jni::as_pointer<llama_sampler*>(
 				samplerChainPointer);
-		if (engine == nullptr)
-			throw std::invalid_argument("Speculative engine pointer is null");
-		if (sampler == nullptr)
-			throw std::invalid_argument("Sampler chain pointer is null");
-		if (length <= 0)
-			throw std::invalid_argument("Prompt token list is empty");
+		llama_tokens tokens = jjml_spec_tokens_from_java(env, promptTokens,
+				offset, length);
+		jjml_spec_begin_from_target_position(engine, sampler, tokens, 0);
+	} catch (const std::exception &ex) {
+		argeo::jni::throw_to_java(env, ex);
+	}
+}
 
-		jint *arr = env->GetIntArrayElements(promptTokens, nullptr);
-		try {
-			llama_tokens tokens;
-			tokens.reserve(length);
-			for (int i = 0; i < length; ++i)
-				tokens.push_back(static_cast<llama_token>(arr[offset + i]));
-			jjml_spec_prefill(engine, sampler, tokens);
-		} catch (...) {
-			env->ReleaseIntArrayElements(promptTokens, arr, JNI_ABORT);
-			throw;
-		}
-		env->ReleaseIntArrayElements(promptTokens, arr, JNI_ABORT);
+JNIEXPORT void JNICALL Java_org_argeo_jjml_llm_LlamaCppSpeculativeProcessor_doBeginFromRestoredTarget(
+		JNIEnv *env, jobject obj, jlong samplerChainPointer,
+		jintArray promptTokens, jint offset, jint length,
+		jint restoredTokenCount) {
+	try {
+		if (restoredTokenCount < 0)
+			throw std::invalid_argument(
+					"restoredTokenCount must not be negative");
+		auto *engine = argeo::jni::as_pointer<jjml_speculative_engine*>(env,
+				obj);
+		auto *sampler = argeo::jni::as_pointer<llama_sampler*>(
+				samplerChainPointer);
+		llama_tokens tokens = jjml_spec_tokens_from_java(env, promptTokens,
+				offset, length);
+		jjml_spec_begin_from_target_position(engine, sampler, tokens,
+				static_cast<size_t>(restoredTokenCount));
 	} catch (const std::exception &ex) {
 		argeo::jni::throw_to_java(env, ex);
 	}

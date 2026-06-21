@@ -54,6 +54,9 @@ public class LlamaCppSpeculativeProcessor implements LongSupplier, AutoCloseable
 
 	private native void doBegin(long samplerChainPointer, int[] promptTokens, int offset, int length);
 
+	private native void doBeginFromRestoredTarget(long samplerChainPointer, int[] promptTokens, int offset, int length,
+			int restoredTokenCount);
+
 	private native int doRead(long samplerChainPointer, IntBuffer output, int offset, int length);
 
 	private native int[] doReadArray(long samplerChainPointer, int maxTokens);
@@ -65,19 +68,31 @@ public class LlamaCppSpeculativeProcessor implements LongSupplier, AutoCloseable
 		checkOpen();
 		if (begun)
 			throw new IllegalStateException("Speculative generation has already begun");
-		int[] arr;
-		int offset;
-		int length = promptTokens.remaining();
-		if (promptTokens.hasArray() && !promptTokens.isReadOnly()) {
-			arr = promptTokens.array();
-			offset = promptTokens.arrayOffset() + promptTokens.position();
-			promptTokens.position(promptTokens.limit());
-		} else {
-			arr = new int[length];
-			promptTokens.get(arr);
-			offset = 0;
-		}
-		doBegin(samplerChain.getAsLong(), arr, offset, length);
+		TokenArrayView tokens = consumeTokens(promptTokens);
+		doBegin(samplerChain.getAsLong(), tokens.array, tokens.offset, tokens.length);
+		begun = true;
+	}
+
+	/**
+	 * Begin speculative generation after the target context has already been restored
+	 * to contain the first {@code restoredTokenCount} tokens from {@code promptTokens}.
+	 * The remaining tokens are replayed through the target context so that the MTP
+	 * draft context and hidden-state bridge are rebuilt without replaying the whole
+	 * prompt. Callers should keep a short overlap after the saved context position;
+	 * an empty tail cannot rebuild the MTP draft state.
+	 */
+	public synchronized void beginFromRestoredTarget(IntBuffer promptTokens, int restoredTokenCount) {
+		Objects.requireNonNull(promptTokens);
+		checkOpen();
+		if (begun)
+			throw new IllegalStateException("Speculative generation has already begun");
+		TokenArrayView tokens = consumeTokens(promptTokens);
+		if (restoredTokenCount < 0)
+			throw new IllegalArgumentException("restoredTokenCount must not be negative");
+		if (restoredTokenCount >= tokens.length)
+			throw new IllegalArgumentException("restoredTokenCount must leave at least one token to replay");
+		doBeginFromRestoredTarget(samplerChain.getAsLong(), tokens.array, tokens.offset, tokens.length,
+				restoredTokenCount);
 		begun = true;
 	}
 
@@ -138,5 +153,30 @@ public class LlamaCppSpeculativeProcessor implements LongSupplier, AutoCloseable
 	private void checkBegun() {
 		if (!begun)
 			throw new IllegalStateException("Call begin(...) before reading generated tokens");
+	}
+
+	private static TokenArrayView consumeTokens(IntBuffer tokens) {
+		int length = tokens.remaining();
+		if (tokens.hasArray() && !tokens.isReadOnly()) {
+			int[] arr = tokens.array();
+			int offset = tokens.arrayOffset() + tokens.position();
+			tokens.position(tokens.limit());
+			return new TokenArrayView(arr, offset, length);
+		}
+		int[] arr = new int[length];
+		tokens.get(arr);
+		return new TokenArrayView(arr, 0, length);
+	}
+
+	private static final class TokenArrayView {
+		final int[] array;
+		final int offset;
+		final int length;
+
+		TokenArrayView(int[] array, int offset, int length) {
+			this.array = array;
+			this.offset = offset;
+			this.length = length;
+		}
 	}
 }
