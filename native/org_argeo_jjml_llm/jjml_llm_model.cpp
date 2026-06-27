@@ -350,7 +350,7 @@ JNIEXPORT jint JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doGetContextTrainin
 JNIEXPORT jint JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doGetEmbeddingSize(
 		JNIEnv *env, jobject obj) {
 	auto *model = argeo::jni::as_pointer<llama_model*>(env, obj);
-	return llama_model_n_embd(model);
+	return llama_model_n_embd_out(model);
 }
 
 JNIEXPORT jint JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doGetLayerCount(

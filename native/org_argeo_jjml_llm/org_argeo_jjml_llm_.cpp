@@ -197,3 +197,7 @@ JNIEXPORT jboolean JNICALL Java_org_argeo_jjml_llm_LlamaCppBackend_supportsGpuOf
 	return llama_supports_gpu_offload();
 }
 
+JNIEXPORT jint JNICALL Java_org_argeo_jjml_llm_LlamaCppBackend_maxParallelSequences(
+		JNIEnv*, jclass) {
+	return static_cast<jint>(llama_max_parallel_sequences());
+}

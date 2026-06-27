@@ -34,6 +34,8 @@ public class LlamaCppBackend {
 
 	private static native LlamaCppDevice[] doGetDevices();
 
+	static native int maxParallelSequences();
+
 	public static native boolean supportsMmap();
 
 	public static native boolean supportsMlock();

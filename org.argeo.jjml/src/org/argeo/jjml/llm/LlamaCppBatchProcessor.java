@@ -107,23 +107,31 @@ public class LlamaCppBatchProcessor {
 	 * {@link #writeBatch(IntBuffer[], boolean)}.
 	 */
 	protected synchronized void writeBatch(IntBuffer buf, boolean thenLastLogits) {
+		Objects.requireNonNull(buf, "Input buffer cannot be null");
 		int tokenCount = buf.remaining();
+		if (tokenCount == 0)
+			throw new IllegalArgumentException("Input buffer is empty");
 		int batchSize = getContext().getBatchSize();
-		int batchCount = tokenCount / batchSize;
-		if (tokenCount % batchSize != 0)
-			batchCount = batchCount + 1;
-		for (int i = 0; i < batchCount; i++) {
-			IntBuffer input = buf.slice();
-			boolean lastLogits;
-			if (i == batchCount - 1) {
-				input.limit(tokenCount % batchSize == 0 ? batchSize : tokenCount % batchSize);
-				lastLogits = thenLastLogits;
-			} else {
-				input.limit(batchSize);
-				lastLogits = false;
-			}
-			buf.position(buf.position() + input.limit());
+		if (batchSize <= 0)
+			throw new IllegalStateException("Context batch size must be positive");
+		for (int i = 0; i < parallelCount; i++)
+			if (tokens[i].remaining() < tokenCount)
+				throw new IllegalArgumentException("Input would exceed token cache capacity for sequence "
+						+ sequenceIds[i] + ": " + tokenCount + " tokens, " + tokens[i].remaining()
+						+ " slots remaining");
+		int startPosition = buf.position();
+		int remaining = tokenCount;
+		while (remaining > 0) {
+			int chunkLength = Math.min(batchSize, remaining);
+			IntBuffer input = buf.duplicate();
+			input.position(startPosition);
+			input.limit(startPosition + chunkLength);
+			input = input.slice();
+			boolean lastLogits = remaining == chunkLength && thenLastLogits;
 			writeBatch(new IntBuffer[] { input }, lastLogits);
+			startPosition += chunkLength;
+			remaining -= chunkLength;
+			buf.position(startPosition);
 		}
 	}
 
@@ -143,27 +151,29 @@ public class LlamaCppBatchProcessor {
 		if (!(inputs.length == 1 || inputs.length == parallelCount))
 			throw new IllegalArgumentException("There must be"
 					+ (parallelCount > 1 ? " either one or " + parallelCount + " inputs" : " only one input"));
+		BufferAccess[] inputAccesses = snapshotBuffers(inputs);
+		checkInputBuffers(inputAccesses);
+		checkTokenCacheCapacity(inputs, inputAccesses);
 		int[] offsets = new int[inputs.length];
 		int[] lengths = new int[inputs.length];
 		int[][] arrays = new int[inputs.length][];
-		boolean allDirect = areAllBuffersDirect(inputs, offsets, lengths);
+		boolean allDirect = areAllBuffersDirect(inputAccesses, offsets, lengths);
 
 		if (allDirect) {
 			contextPosition = doWrite(context.getAsLong(), samplerChain.getAsLong(), contextPosition, inputs, offsets,
 					lengths, sequenceIds, outputIds, lastLogits);
 		} else {
-			buffersToArrays(inputs, offsets, lengths, arrays, true);
+			buffersToArrays(inputAccesses, offsets, lengths, arrays, true);
 			contextPosition = doWriteArrays(context.getAsLong(), samplerChain.getAsLong(), contextPosition, arrays,
 					offsets, lengths, sequenceIds, outputIds, lastLogits);
 		}
 
 		// cache tokens
 		for (int i = 0; i < parallelCount; i++) {
-			IntBuffer toCopy = inputs.length == 1 ? inputs[0] : inputs[i];
-			toCopy.position(inputs.length == 1 ? offsets[0] : offsets[i]);
-			toCopy.limit(inputs.length == 1 ? offsets[0] + lengths[0] : offsets[i] + lengths[i]);
-			tokens[i].put(toCopy);
+			BufferAccess toCopy = inputAccesses[inputs.length == 1 ? 0 : i];
+			cacheTokens(i, toCopy, toCopy.length);
 		}
+		advanceBuffers(inputAccesses);
 
 		if (lastLogits && contextPosition > 0) {// end of user input
 			samplerChain.reset();
@@ -210,9 +220,11 @@ public class LlamaCppBatchProcessor {
 			throw new IllegalArgumentException("There must be " + parallelCount + " outputs");
 		if (generationCompleted != null && generationCompleted.length != parallelCount)
 			throw new IllegalArgumentException("There must be " + parallelCount + " callbacks");
+		BufferAccess[] outputAccesses = snapshotBuffers(outputs);
+		checkOutputBuffers(outputAccesses);
 		int[] offsets = new int[outputs.length];
 		int[] lengths = new int[outputs.length];
-		boolean allDirect = areAllBuffersDirect(outputs, offsets, lengths);
+		boolean allDirect = areAllBuffersDirect(outputAccesses, offsets, lengths);
 		int[][] arrays = allDirect ? null : new int[outputs.length][];
 
 		// this will be notified by each sequence when it is completed
@@ -227,21 +239,26 @@ public class LlamaCppBatchProcessor {
 			@Override
 			public void completed(Integer result, Integer sequenceIndex) {
 				IntBuffer output = outputs[sequenceIndex];
-				int currentOutputPosition = output.position();
-				int currentOutputLimit = output.limit();
-				if (arrays != null && !output.hasArray()) {
-					output.put(arrays[sequenceIndex], 0, result);
-				} else {
-					output.position(output.position() + result);
-				}
+				BufferAccess outputAccess = outputAccesses[sequenceIndex];
+				if (output != null) {
+					if (result < 0 || result > outputAccess.length)
+						throw new IndexOutOfBoundsException(result);
+					if (outputAccess.copiedArray) {
+						int currentOutputLimit = output.limit();
+						output.position(outputAccess.javaPosition);
+						output.limit(outputAccess.javaPosition + outputAccess.length);
+						output.put(arrays[sequenceIndex], 0, result);
+						output.limit(currentOutputLimit);
+					} else {
+						output.position(outputAccess.javaPosition + result);
+					}
 
-				// cache tokens
-				for (int i = 0; i < parallelCount; i++) {
-					IntBuffer toCopy = outputs[i];
-					toCopy.position(currentOutputPosition);
-					toCopy.limit(currentOutputPosition + result);
-					tokens[i].put(toCopy);
-					toCopy.limit(currentOutputLimit);
+					// cache tokens
+					if (outputAccess.copiedArray) {
+						tokens[sequenceIndex].put(arrays[sequenceIndex], 0, result);
+					} else {
+						cacheTokens(sequenceIndex, outputAccess, result);
+					}
 				}
 
 				if (generationCompleted != null) {
@@ -262,7 +279,7 @@ public class LlamaCppBatchProcessor {
 							validatingSampler != null ? validatingSampler.getAsLong() : 0, contextPosition, outputs,
 							offsets, lengths, sequenceIds, outputIds, completionHandler);
 				} else {
-					buffersToArrays(outputs, offsets, lengths, arrays, false);
+					buffersToArrays(outputAccesses, offsets, lengths, arrays, false);
 					contextPosition = doReadToArrays(context.getAsLong(), samplerChain.getAsLong(),
 							validatingSampler != null ? validatingSampler.getAsLong() : 0, contextPosition, arrays,
 							offsets, lengths, sequenceIds, outputIds, completionHandler);
@@ -286,18 +303,18 @@ public class LlamaCppBatchProcessor {
 	 * Common routine to fill check whether all buffers are direct. If all buffers
 	 * are direct, the arrays will be filled with proper values, otherwise they will
 	 * need to be processed again (via
-	 * {@link #buffersToArrays(IntBuffer[], int[], int[], int[][], boolean)}.
+	 * {@link #buffersToArrays(BufferAccess[], int[], int[], int[][], boolean)}.
 	 */
-	private boolean areAllBuffersDirect(IntBuffer[] buffers, int[] offsets, int[] lengths) {
+	private boolean areAllBuffersDirect(BufferAccess[] buffers, int[] offsets, int[] lengths) {
 		boolean allDirect = true;
 		for (int i = 0; i < buffers.length; i++) {
-			IntBuffer buf = buffers[i];
-			if (buf == null) {
+			BufferAccess access = buffers[i];
+			if (access.buffer == null) {
 				offsets[i] = 0;
 				lengths[i] = 0;
-			} else if (buf.isDirect()) {
-				offsets[i] = buf.position();
-				lengths[i] = buf.remaining();
+			} else if (access.buffer.isDirect()) {
+				offsets[i] = access.javaPosition;
+				lengths[i] = access.length;
 			} else {
 				allDirect = false;
 				break;
@@ -309,25 +326,96 @@ public class LlamaCppBatchProcessor {
 	/**
 	 * Common routine to fill arrays, to be used when not all buffers are direct.
 	 */
-	private void buffersToArrays(IntBuffer[] buffers, int[] offsets, int[] lengths, int[][] arrays, boolean input) {
+	private void buffersToArrays(BufferAccess[] buffers, int[] offsets, int[] lengths, int[][] arrays, boolean input) {
 		for (int i = 0; i < buffers.length; i++) {
-			IntBuffer buf = buffers[i];
+			BufferAccess access = buffers[i];
+			IntBuffer buf = access.buffer;
 			if (buf == null) {
 				offsets[i] = 0;
 				lengths[i] = 0;
 				arrays[i] = null;
 			} else if (buf.hasArray()) {
-				offsets[i] = buf.arrayOffset() + buf.position();
-				lengths[i] = buf.remaining();
+				offsets[i] = buf.arrayOffset() + access.javaPosition;
+				lengths[i] = access.length;
 				arrays[i] = buf.array();
 			} else {// new array
 				offsets[i] = 0;
-				lengths[i] = buf.remaining();
+				lengths[i] = access.length;
 				int[] arr = new int[lengths[i]];
-				if (input)
-					buf.get(arr);
+				access.copiedArray = true;
+				if (input) {
+					IntBuffer duplicate = buf.duplicate();
+					duplicate.position(access.javaPosition);
+					duplicate.limit(access.javaPosition + access.length);
+					duplicate.get(arr);
+				}
 				arrays[i] = arr;
 			}
+		}
+	}
+
+	private BufferAccess[] snapshotBuffers(IntBuffer[] buffers) {
+		BufferAccess[] res = new BufferAccess[buffers.length];
+		for (int i = 0; i < buffers.length; i++)
+			res[i] = new BufferAccess(buffers[i]);
+		return res;
+	}
+
+	private void checkInputBuffers(BufferAccess[] inputs) {
+		for (int i = 0; i < inputs.length; i++) {
+			BufferAccess input = inputs[i];
+			if (input.buffer == null)
+				throw new IllegalArgumentException("Input buffer " + i + " cannot be null");
+			if (input.length == 0)
+				throw new IllegalArgumentException("Input buffer " + i + " is empty");
+		}
+	}
+
+	private void checkOutputBuffers(BufferAccess[] outputs) {
+		for (int i = 0; i < outputs.length; i++) {
+			BufferAccess output = outputs[i];
+			if (output.buffer != null && output.buffer.isReadOnly())
+				throw new IllegalArgumentException("Output buffer " + i + " is read-only");
+		}
+	}
+
+	private void checkTokenCacheCapacity(IntBuffer[] inputs, BufferAccess[] inputAccesses) {
+		for (int i = 0; i < parallelCount; i++) {
+			BufferAccess input = inputAccesses[inputs.length == 1 ? 0 : i];
+			if (tokens[i].remaining() < input.length)
+				throw new IllegalArgumentException("Input would exceed token cache capacity for sequence "
+						+ sequenceIds[i] + ": " + input.length + " tokens, " + tokens[i].remaining()
+						+ " slots remaining");
+		}
+	}
+
+	private void cacheTokens(int sequenceIndex, BufferAccess source, int length) {
+		if (source.buffer == null || length == 0)
+			return;
+		if (tokens[sequenceIndex].remaining() < length)
+			throw new IllegalStateException("Token cache capacity exceeded for sequence " + sequenceIds[sequenceIndex]);
+		IntBuffer duplicate = source.buffer.duplicate();
+		duplicate.position(source.javaPosition);
+		duplicate.limit(source.javaPosition + length);
+		tokens[sequenceIndex].put(duplicate);
+	}
+
+	private void advanceBuffers(BufferAccess[] accesses) {
+		for (BufferAccess access : accesses)
+			if (access.buffer != null)
+				access.buffer.position(access.javaPosition + access.length);
+	}
+
+	private static final class BufferAccess {
+		private final IntBuffer buffer;
+		private final int javaPosition;
+		private final int length;
+		private boolean copiedArray;
+
+		private BufferAccess(IntBuffer buffer) {
+			this.buffer = buffer;
+			this.javaPosition = buffer == null ? 0 : buffer.position();
+			this.length = buffer == null ? 0 : buffer.remaining();
 		}
 	}
 

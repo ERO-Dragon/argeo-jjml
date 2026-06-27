@@ -46,10 +46,20 @@ public class LlamaCppContext implements LongSupplier, AutoCloseable {
 	public LlamaCppContext(LlamaCppModel model, ContextParams initParams) {
 		Objects.requireNonNull(model);
 		Objects.requireNonNull(initParams);
-		if (initParams.embeddings() && initParams.n_ubatch() != initParams.n_batch()) {
-			initParams = initParams.with(ContextParam.n_batch, initParams.n_ubatch());
-//			logger.log(WARNING, "Embeddings requires same logical and physical batch size, forcing n_batch to "
-//					+ initParams.n_ubatch());
+		if (initParams.embeddings()) {
+			int embeddingBatchSize = initParams.n_batch();
+			int embeddingContextSize = initParams.n_ctx() > 0 ? initParams.n_ctx() : model.getContextTrainingSize();
+			if (embeddingContextSize > 0 && embeddingBatchSize < embeddingContextSize)
+				embeddingBatchSize = embeddingContextSize;
+			boolean defaultSingleSequence = initParams.n_seq_max() <= 1;
+			initParams = initParams //
+					.with(ContextParam.n_batch, embeddingBatchSize) //
+					.with(ContextParam.n_ubatch, embeddingBatchSize);
+			if (defaultSingleSequence) {
+				initParams = initParams //
+						.with(ContextParam.kv_unified, true) //
+						.with(ContextParam.n_seq_max, LlamaCppBackend.maxParallelSequences());
+			}
 		}
 		this.pointer = doInit(model, initParams);
 		this.model = model;
