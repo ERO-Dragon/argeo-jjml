@@ -47,6 +47,11 @@ public class LlamaCppContext implements LongSupplier, AutoCloseable {
 		Objects.requireNonNull(model);
 		Objects.requireNonNull(initParams);
 		if (initParams.embeddings()) {
+			if (initParams.pooling_type() == PoolingType.LLAMA_POOLING_TYPE_UNSPECIFIED.getAsInt()
+					&& model.getDefaultPoolingType() != PoolingType.LLAMA_POOLING_TYPE_UNSPECIFIED) {
+				initParams = initParams.with(ContextParam.pooling_type, model.getDefaultPoolingType());
+			}
+
 			int embeddingBatchSize = initParams.n_batch();
 			int embeddingContextSize = initParams.n_ctx() > 0 ? initParams.n_ctx() : model.getContextTrainingSize();
 			if (embeddingContextSize > 0 && embeddingBatchSize < embeddingContextSize)

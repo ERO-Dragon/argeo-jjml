@@ -23,6 +23,7 @@ import java.util.function.LongSupplier;
 
 import org.argeo.jjml.llm.params.ModelParam;
 import org.argeo.jjml.llm.params.ModelParams;
+import org.argeo.jjml.llm.params.PoolingType;
 import org.argeo.jjml.llm.util.InstructRole;
 import org.argeo.jjml.llm.util.ThinkingMode;
 
@@ -54,6 +55,7 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 	private final int embeddingSize;
 	private final int layerCount;
 	private final Map<String, String> metadata;
+	private final PoolingType defaultPoolingType;
 	private final int mtpLayerCount;
 	private final String description;
 	private final long modelSize;
@@ -81,6 +83,7 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 			map.put(new String(keys[i], UTF_8), new String(values[i], UTF_8));
 		}
 		metadata = Collections.unmodifiableMap(map);
+		defaultPoolingType = resolveDefaultPoolingType(metadata);
 		mtpLayerCount = resolveNextnPredictLayers(metadata);
 		if (metadata.containsKey("tokenizer.chat_template")) {
 			chatTemplate = metadata.get("tokenizer.chat_template");
@@ -296,6 +299,18 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 	}
 
 	/**
+	 * Return the embedding pooling type declared by the model GGUF metadata.
+	 * <p>
+	 * GGUF stores this under the architecture-specific key
+	 * {@code <architecture>.pooling_type}, for example {@code bert.pooling_type}.
+	 * If the model does not declare a pooling type, this returns
+	 * {@link PoolingType#LLAMA_POOLING_TYPE_UNSPECIFIED}.
+	 */
+	public PoolingType getDefaultPoolingType() {
+		return defaultPoolingType;
+	}
+
+	/**
 	 * Return the model's static MTP layer count as declared in GGUF metadata.
 	 * <p>
 	 * This is a capability signal, not a runtime draft-window setting.
@@ -424,6 +439,33 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 			}
 		}
 		return 0;
+	}
+
+	private static PoolingType resolveDefaultPoolingType(Map<String, String> metadata) {
+		String architecture = metadata.get("general.architecture");
+		if (architecture != null) {
+			PoolingType value = parsePoolingType(metadata.get(architecture + ".pooling_type"));
+			if (value != null)
+				return value;
+		}
+		for (Map.Entry<String, String> entry : metadata.entrySet()) {
+			if (entry.getKey().endsWith(".pooling_type")) {
+				PoolingType value = parsePoolingType(entry.getValue());
+				if (value != null)
+					return value;
+			}
+		}
+		return PoolingType.LLAMA_POOLING_TYPE_UNSPECIFIED;
+	}
+
+	private static PoolingType parsePoolingType(String value) {
+		if (value == null)
+			return null;
+		try {
+			return PoolingType.byCode(Integer.parseInt(value.trim()));
+		} catch (IllegalArgumentException e) {
+			return null;
+		}
 	}
 
 	private static int parseNonNegativeInt(String value) {
