@@ -42,6 +42,9 @@ public class LlamaCppSamplers {
 
 	private static native long doInitGrammar(LlamaCppModel model, byte[] grammarUtf8, byte[] rootUtf8);
 
+	private static native long doInitGrammarLazy(LlamaCppModel model, byte[] grammarUtf8, byte[] rootUtf8,
+			int[] triggerTypes, byte[][] triggerValues, int[] triggerTokens);
+
 	private static native long doInitJavaSampler(LlamaCppJavaSampler javaSampler);
 
 	/*
@@ -139,6 +142,32 @@ public class LlamaCppSamplers {
 
 	public static LlamaCppNativeSampler newSamplerGrammar(LlamaCppModel model, String grammar, String root) {
 		return new LlamaCppNativeSampler(doInitGrammar(model, grammar.getBytes(UTF_8), root.getBytes(UTF_8)));
+	}
+
+	/**
+	 * Create the grammar sampler selected by a formatted chat request.
+	 * <p>
+	 * Tool-call formats commonly use lazy grammars: free text is allowed until a
+	 * model-specific trigger starts a tool call, then the grammar constrains the
+	 * structured payload.
+	 */
+	public static LlamaCppNativeSampler newSamplerGrammar(LlamaCppModel model, LlamaCppChatFormat chatFormat) {
+		if (chatFormat.grammar().isEmpty())
+			throw new IllegalArgumentException("Chat format does not define a grammar");
+		if (!chatFormat.grammarLazy())
+			return newSamplerGrammar(model, chatFormat.grammar(), "root");
+
+		LlamaCppGrammarTrigger[] triggers = chatFormat.grammarTriggers();
+		int[] triggerTypes = new int[triggers.length];
+		byte[][] triggerValues = new byte[triggers.length][];
+		int[] triggerTokens = new int[triggers.length];
+		for (int i = 0; i < triggers.length; i++) {
+			triggerTypes[i] = triggers[i].type();
+			triggerValues[i] = triggers[i].value().getBytes(UTF_8);
+			triggerTokens[i] = triggers[i].token();
+		}
+		return new LlamaCppNativeSampler(doInitGrammarLazy(model, chatFormat.grammar().getBytes(UTF_8),
+				"root".getBytes(UTF_8), triggerTypes, triggerValues, triggerTokens));
 	}
 
 	public static LlamaCppNativeSampler newJavaSampler(LlamaCppJavaSampler javaSampler) {

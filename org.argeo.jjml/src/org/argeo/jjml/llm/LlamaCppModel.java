@@ -21,8 +21,11 @@ import java.util.function.DoubleConsumer;
 import java.util.function.DoublePredicate;
 import java.util.function.LongSupplier;
 
+import org.argeo.jjml.ggml.params.GgmlType;
 import org.argeo.jjml.llm.params.ModelParam;
 import org.argeo.jjml.llm.params.ModelParams;
+import org.argeo.jjml.llm.params.ContextParams;
+import org.argeo.jjml.llm.params.FlashAttentionType;
 import org.argeo.jjml.llm.params.PoolingType;
 import org.argeo.jjml.llm.util.InstructRole;
 import org.argeo.jjml.llm.util.ThinkingMode;
@@ -119,6 +122,10 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 
 	private native long doGetModelSize();
 
+	private native long doEstimateKvCacheBytesPerToken(int typeK, int typeV, int flashAttentionType);
+
+	private native LlamaCppDevice[] doGetDevices();
+
 	private native int doGetEndOfGenerationToken();
 
 	/*
@@ -197,9 +204,8 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 	 */
 	public String formatChatMessagesJinja(List<LlamaCppChatMessage> messages, boolean addGenerationPrompt,
 			ThinkingMode thinkingMode, Map<String, String> chatTemplateKwargs) {
-		boolean enableThinking = resolveEnableThinking(thinkingMode);
-		return LLamaCppNativeChatFormatter.formatChatMessagesJinja(pointer, messages, addGenerationPrompt,
-				chatTemplate, enableThinking, chatTemplateKwargs);
+		return formatChatMessagesJinjaFull(messages, addGenerationPrompt, thinkingMode, chatTemplateKwargs,
+				Collections.emptyList(), LlamaCppChatToolChoice.AUTO, false, null).prompt();
 	}
 
 	/**
@@ -220,11 +226,28 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 	}
 
 	/**
+	 * Format chat messages and return llama.cpp's full formatting metadata.
+	 * <p>
+	 * When tools or a JSON schema are provided, the returned grammar and parser
+	 * fields describe the constraints and parsing mode selected by llama.cpp.
+	 */
+	public LlamaCppChatFormat formatChatMessagesJinjaFull(List<LlamaCppChatMessage> messages,
+			boolean addGenerationPrompt, ThinkingMode thinkingMode, Map<String, String> chatTemplateKwargs,
+			List<LlamaCppChatTool> tools, LlamaCppChatToolChoice toolChoice, boolean parallelToolCalls,
+			String jsonSchema) {
+		boolean enableThinking = resolveEnableThinking(thinkingMode);
+		return LLamaCppNativeChatFormatter.formatChatMessagesJinjaFull(pointer, messages, addGenerationPrompt,
+				chatTemplate, enableThinking, chatTemplateKwargs, tools, toolChoice, parallelToolCalls, jsonSchema);
+	}
+
+	/**
 	 * Resolve the effective enable_thinking flag from the given thinking mode.
 	 */
 	private boolean resolveEnableThinking(ThinkingMode thinkingMode) {
 		Objects.requireNonNull(thinkingMode);
 		if (thinkingMode == ThinkingMode.ENABLED) {
+			if (!supportsEnableThinking())
+				throw new IllegalArgumentException("This model chat template does not support enable_thinking");
 			return true;
 		} else if (thinkingMode == ThinkingMode.DISABLED) {
 			return false;
@@ -240,6 +263,11 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 	 */
 	public boolean supportsEnableThinking() {
 		return LLamaCppNativeChatFormatter.supportsEnableThinking(pointer, chatTemplate);
+	}
+
+	/** Return chat-template capability flags inferred by llama.cpp. */
+	public LlamaCppChatTemplateCapabilities getChatTemplateCapabilities() {
+		return LLamaCppNativeChatFormatter.getTemplateCapabilities(pointer, chatTemplate);
 	}
 
 	/*
@@ -333,6 +361,40 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 
 	public long getModelSize() {
 		return modelSize;
+	}
+
+	/**
+	 * Estimate the standard KV cache byte slope for one context token with the
+	 * provided cache settings.
+	 * <p>
+	 * This is a low-level model capability signal. It does not include fixed
+	 * context buffers, compute buffers, allocator overhead, or policy margins.
+	 */
+	public long estimateKvCacheBytesPerToken(GgmlType typeK, GgmlType typeV, FlashAttentionType flashAttentionType) {
+		checkDestroyed();
+		Objects.requireNonNull(typeK);
+		Objects.requireNonNull(typeV);
+		Objects.requireNonNull(flashAttentionType);
+		return doEstimateKvCacheBytesPerToken(typeK.getAsInt(), typeV.getAsInt(), flashAttentionType.getAsInt());
+	}
+
+	/**
+	 * Estimate the standard KV cache byte slope for one context token with the
+	 * provided context parameters.
+	 */
+	public long estimateKvCacheBytesPerToken(ContextParams contextParams) {
+		Objects.requireNonNull(contextParams);
+		return estimateKvCacheBytesPerToken(GgmlType.byCode(contextParams.type_k()),
+				GgmlType.byCode(contextParams.type_v()), FlashAttentionType.byCode(contextParams.flash_attn_type()));
+	}
+
+	/**
+	 * Return the backend devices recorded by this loaded model. The memory values
+	 * are sampled when this method is called.
+	 */
+	public LlamaCppDevice[] getDevices() {
+		checkDestroyed();
+		return doGetDevices();
 	}
 
 	public int getEndOfGenerationToken() {

@@ -6,11 +6,14 @@
 
 #include <llama.h>
 
+#include "../tp/llama.cpp/src/llama-ext.h"
+
 #include <argeo/jni/argeo_jni.h>
 
 #include "org_argeo_jjml_llm_LlamaCppBackend.h" // IWYU pragma: keep
 #include "org_argeo_jjml_llm_LlamaCppContext.h" // IWYU pragma: keep
 
+#include "jjml_llm.h"
 #include "org_argeo_jjml_llm_.h"
 
 static struct ggml_threadpool *threadpool = NULL;
@@ -78,49 +81,6 @@ static llama_attention_type jjml_llm_attention_type_from_int(jint value) {
 	default:
 		throw std::invalid_argument(
 				"Invalid llama attention type value: " + std::to_string(value));
-	}
-}
-
-static llama_flash_attn_type jjml_llm_flash_attn_type_from_int(jint value) {
-	switch (value) {
-	case LLAMA_FLASH_ATTN_TYPE_AUTO:
-		return LLAMA_FLASH_ATTN_TYPE_AUTO;
-	case LLAMA_FLASH_ATTN_TYPE_DISABLED:
-		return LLAMA_FLASH_ATTN_TYPE_DISABLED;
-	case LLAMA_FLASH_ATTN_TYPE_ENABLED:
-		return LLAMA_FLASH_ATTN_TYPE_ENABLED;
-	default:
-		throw std::invalid_argument(
-				"Invalid llama flash attention type value: "
-						+ std::to_string(value));
-	}
-}
-
-static ggml_type jjml_llm_kv_cache_type_from_int(jint value,
-		const char *param_name) {
-	switch (value) {
-	case GGML_TYPE_F32:
-		return GGML_TYPE_F32;
-	case GGML_TYPE_F16:
-		return GGML_TYPE_F16;
-	case GGML_TYPE_BF16:
-		return GGML_TYPE_BF16;
-	case GGML_TYPE_Q8_0:
-		return GGML_TYPE_Q8_0;
-	case GGML_TYPE_Q4_0:
-		return GGML_TYPE_Q4_0;
-	case GGML_TYPE_Q4_1:
-		return GGML_TYPE_Q4_1;
-	case GGML_TYPE_IQ4_NL:
-		return GGML_TYPE_IQ4_NL;
-	case GGML_TYPE_Q5_0:
-		return GGML_TYPE_Q5_0;
-	case GGML_TYPE_Q5_1:
-		return GGML_TYPE_Q5_1;
-	default:
-		throw std::invalid_argument(
-				std::string("Unsupported ") + param_name
-						+ " cache type value: " + std::to_string(value));
 	}
 }
 
@@ -435,4 +395,49 @@ JNIEXPORT jint JNICALL Java_org_argeo_jjml_llm_LlamaCppContext_doGetMaxSequenceC
 		JNIEnv *env, jobject obj) {
 	auto *ctx = argeo::jni::as_pointer<llama_context*>(env, obj);
 	return llama_n_seq_max(ctx);
+}
+
+JNIEXPORT jobjectArray JNICALL Java_org_argeo_jjml_llm_LlamaCppContext_doGetMemoryBreakdown(
+		JNIEnv *env, jobject obj) {
+	try {
+		static_assert(sizeof(jlong) >= sizeof(size_t));
+		auto *ctx = argeo::jni::as_pointer<llama_context*>(env, obj);
+		llama_memory_breakdown memory_breakdown = llama_get_memory_breakdown(
+				ctx);
+		jclass breakdownClass = argeo::jni::find_jclass(env,
+				JCLASS_MEMORY_BREAKDOWN);
+		jobjectArray res = env->NewObjectArray(
+				static_cast<jsize>(memory_breakdown.size()), breakdownClass,
+				nullptr);
+
+		jsize index = 0;
+		for (const auto &buft_mb : memory_breakdown) {
+			ggml_backend_buffer_type_t buft = buft_mb.first;
+			const llama_memory_breakdown_data &mb = buft_mb.second;
+			const char *buft_name = ggml_backend_buft_name(buft);
+			jstring bufferType = env->NewStringUTF(
+					buft_name != nullptr ? buft_name : "");
+			const bool host = ggml_backend_buft_is_host(buft);
+			ggml_backend_dev_t device = host ? nullptr :
+					ggml_backend_buft_get_device(buft);
+			jobject deviceObj = device != nullptr ?
+					jjml_llm_new_device(env, device) : nullptr;
+
+			jobject breakdownObj = env->NewObject(breakdownClass,
+					LlamaCppMemoryBreakdown__init, //
+					bufferType, deviceObj, static_cast<jboolean>(host), //
+					static_cast<jlong>(mb.model), //
+					static_cast<jlong>(mb.context), //
+					static_cast<jlong>(mb.compute));
+			env->SetObjectArrayElement(res, index++, breakdownObj);
+
+			env->DeleteLocalRef(bufferType);
+			if (deviceObj != nullptr)
+				env->DeleteLocalRef(deviceObj);
+			env->DeleteLocalRef(breakdownObj);
+		}
+		return res;
+	} catch (const std::exception &ex) {
+		return argeo::jni::throw_to_java(env, ex);
+	}
 }

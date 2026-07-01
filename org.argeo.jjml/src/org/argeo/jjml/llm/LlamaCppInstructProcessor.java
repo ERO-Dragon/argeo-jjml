@@ -121,15 +121,29 @@ public class LlamaCppInstructProcessor extends LlamaCppBatchProcessor {
 		readMessage(new PrintWriter(out, false, StandardCharsets.UTF_8));
 	}
 
-	public void readMessage(Writer writer) throws IOException {
+	public void readMessage(PrintStream out, int maxTokens) throws IOException {
+		out.flush();
+		readMessage(new PrintWriter(out, false, StandardCharsets.UTF_8), maxTokens);
+	}
 
+	public void readMessage(Writer writer) throws IOException {
+		readMessage(writer, Integer.MAX_VALUE);
+	}
+
+	public void readMessage(Writer writer, int maxTokens) throws IOException {
+		if (maxTokens < 0)
+			throw new IllegalArgumentException("Maximum token count must not be negative");
 		boolean reading = true;
+		int tokenCount = 0;
 		reads: while (reading) {
+			if (tokenCount >= maxTokens)
+				break reads;
 			String outputStr = nextToken();
 			if (outputStr == null)
 				break reads;
 			writer.write(outputStr);
 			writer.flush();
+			tokenCount++;
 		}
 	}
 }

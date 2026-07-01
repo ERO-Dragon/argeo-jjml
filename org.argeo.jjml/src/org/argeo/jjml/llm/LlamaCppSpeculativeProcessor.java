@@ -10,6 +10,7 @@ import java.util.function.LongSupplier;
  */
 public class LlamaCppSpeculativeProcessor implements LongSupplier, AutoCloseable {
 	private final LlamaCppContext context;
+	private final LlamaCppModel draftModel;
 	private final LlamaCppSamplerChain samplerChain;
 	private final long pointer;
 
@@ -18,12 +19,24 @@ public class LlamaCppSpeculativeProcessor implements LongSupplier, AutoCloseable
 
 	public LlamaCppSpeculativeProcessor(LlamaCppContext context, LlamaCppSamplerChain samplerChain,
 			SpeculativeParams params) {
+		this(context, null, samplerChain, params);
+	}
+
+	/**
+	 * Create a speculative processor with an explicit draft model.
+	 * <p>
+	 * This is required by models such as Gemma 4 Assistant MTP where the draft
+	 * head is distributed as a separate GGUF next to the target model.
+	 */
+	public LlamaCppSpeculativeProcessor(LlamaCppContext context, LlamaCppModel draftModel,
+			LlamaCppSamplerChain samplerChain, SpeculativeParams params) {
 		this.context = Objects.requireNonNull(context);
+		this.draftModel = draftModel;
 		this.samplerChain = Objects.requireNonNull(samplerChain);
 		params = Objects.requireNonNull(params);
 		if (!params.isEnabled())
 			throw new IllegalArgumentException("Speculative decoding is disabled by the given parameters");
-		if (params.isMtp() && !context.getModel().supportsMtp())
+		if (params.isMtp() && draftModel == null && !context.getModel().supportsMtp())
 			throw new IllegalArgumentException("Model does not expose MTP/NextN layers. Expected GGUF metadata "
 					+ context.getModel().getMetadata().getOrDefault("general.architecture", "<arch>")
 					+ ".nextn_predict_layers to be greater than zero.");
@@ -45,10 +58,10 @@ public class LlamaCppSpeculativeProcessor implements LongSupplier, AutoCloseable
 				throw new IllegalArgumentException("MTP target context requires n_rs_seq >= " + params.draftMax()
 						+ ". Create the context with SpeculativeParams.adjustTargetContextParams(...).");
 		}
-		this.pointer = doInit(context.getAsLong(), params);
+		this.pointer = doInit(context.getAsLong(), draftModel != null ? draftModel.getAsLong() : 0L, params);
 	}
 
-	private static native long doInit(long contextPointer, SpeculativeParams params);
+	private static native long doInit(long contextPointer, long draftModelPointer, SpeculativeParams params);
 
 	private native void doDestroy();
 
@@ -135,6 +148,14 @@ public class LlamaCppSpeculativeProcessor implements LongSupplier, AutoCloseable
 
 	public LlamaCppContext getContext() {
 		return context;
+	}
+
+	/**
+	 * Return the explicit draft model, or {@code null} when the target model itself
+	 * supplies the MTP layers.
+	 */
+	public LlamaCppModel getDraftModel() {
+		return draftModel;
 	}
 
 	@Override

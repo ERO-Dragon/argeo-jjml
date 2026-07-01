@@ -8,6 +8,32 @@
 
 #include "org_argeo_jjml_llm_.h"
 
+#include "common.h"
+
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace {
+
+static std::string jjml_sampling_bytes(JNIEnv *env, jbyteArray bytes) {
+	void *arr = env->GetPrimitiveArrayCritical(bytes, 0);
+	std::string value(static_cast<char*>(arr), env->GetArrayLength(bytes));
+	env->ReleasePrimitiveArrayCritical(bytes, arr, 0);
+	return value;
+}
+
+static std::string jjml_sampling_bytes(JNIEnv *env, jobjectArray values,
+		jsize index) {
+	jbyteArray bytes = static_cast<jbyteArray>(env->GetObjectArrayElement(
+			values, index));
+	std::string value = jjml_sampling_bytes(env, bytes);
+	env->DeleteLocalRef(bytes);
+	return value;
+}
+
+} // namespace
+
 /*
  * STANDARD SAMPLERS
  */
@@ -90,6 +116,83 @@ JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppSamplers_doInitGrammar(
 	env->ReleasePrimitiveArrayCritical(rootStr, u8_root_arr, 0);
 
 	return reinterpret_cast<jlong>(smpl);
+}
+
+JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppSamplers_doInitGrammarLazy(
+		JNIEnv *env, jclass, jobject modelObj, jbyteArray grammarStr,
+		jbyteArray rootStr, jintArray triggerTypes, jobjectArray triggerValues,
+		jintArray triggerTokens) {
+	try {
+		auto *model = argeo::jni::as_pointer<llama_model*>(env, modelObj);
+		const llama_vocab *vocab = llama_model_get_vocab(model);
+		std::string u8_grammar = jjml_sampling_bytes(env, grammarStr);
+		std::string u8_root = jjml_sampling_bytes(env, rootStr);
+
+		jsize n_triggers = env->GetArrayLength(triggerTypes);
+		if (env->GetArrayLength(triggerValues) != n_triggers
+				|| env->GetArrayLength(triggerTokens) != n_triggers)
+			throw std::invalid_argument("Grammar trigger arrays have different sizes");
+
+		jint *types = env->GetIntArrayElements(triggerTypes, nullptr);
+		jint *tokens = env->GetIntArrayElements(triggerTokens, nullptr);
+		if (types == nullptr || tokens == nullptr)
+			throw std::runtime_error("Failed to access grammar trigger arrays");
+
+		std::vector<std::string> trigger_patterns;
+		std::vector<llama_token> trigger_tokens;
+		try {
+			for (jsize i = 0; i < n_triggers; ++i) {
+				std::string value = jjml_sampling_bytes(env, triggerValues, i);
+				switch (types[i]) {
+				case COMMON_GRAMMAR_TRIGGER_TYPE_WORD:
+					trigger_patterns.push_back(regex_escape(value));
+					break;
+				case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN:
+					trigger_patterns.push_back(value);
+					break;
+				case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL:
+				{
+					std::string anchored = "^$";
+					if (!value.empty()) {
+						anchored = (value.front() != '^' ? "^" : "")
+								+ value + (value.back() != '$' ? "$" : "");
+					}
+					trigger_patterns.push_back(anchored);
+					break;
+				}
+				case COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN:
+					trigger_tokens.push_back(static_cast<llama_token>(tokens[i]));
+					break;
+				default:
+					throw std::invalid_argument(
+							"Unsupported grammar trigger type: "
+									+ std::to_string(types[i]));
+				}
+			}
+		} catch (...) {
+			env->ReleaseIntArrayElements(triggerTypes, types, JNI_ABORT);
+			env->ReleaseIntArrayElements(triggerTokens, tokens, JNI_ABORT);
+			throw;
+		}
+		env->ReleaseIntArrayElements(triggerTypes, types, JNI_ABORT);
+		env->ReleaseIntArrayElements(triggerTokens, tokens, JNI_ABORT);
+
+		std::vector<const char*> trigger_patterns_c;
+		trigger_patterns_c.reserve(trigger_patterns.size());
+		for (const std::string &pattern : trigger_patterns)
+			trigger_patterns_c.push_back(pattern.c_str());
+
+		llama_sampler *smpl = llama_sampler_init_grammar_lazy_patterns(vocab,
+				u8_grammar.c_str(), u8_root.c_str(),
+				trigger_patterns_c.data(), trigger_patterns_c.size(),
+				trigger_tokens.data(), trigger_tokens.size());
+		if (smpl == nullptr)
+			throw std::runtime_error("Failed to initialize lazy grammar sampler");
+		return reinterpret_cast<jlong>(smpl);
+	} catch (const std::exception &ex) {
+		argeo::jni::throw_to_java(env, ex);
+		return 0;
+	}
 }
 
 /*

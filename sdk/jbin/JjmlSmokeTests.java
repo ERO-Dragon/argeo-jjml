@@ -12,6 +12,7 @@ import static org.argeo.jjml.llm.params.ContextParam.embeddings;
 import static org.argeo.jjml.llm.params.ContextParam.kv_unified;
 import static org.argeo.jjml.llm.params.ContextParam.n_batch;
 import static org.argeo.jjml.llm.params.ContextParam.n_ctx;
+import static org.argeo.jjml.llm.params.ContextParam.n_seq_max;
 import static org.argeo.jjml.llm.params.ContextParam.n_threads;
 import static org.argeo.jjml.llm.params.ContextParam.n_ubatch;
 import static org.argeo.jjml.llm.util.InstructRole.ASSISTANT;
@@ -35,23 +36,35 @@ import java.util.concurrent.Future;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
+import org.argeo.jjml.ggml.params.GgmlType;
 import org.argeo.jjml.llm.LlamaCppBackend;
+import org.argeo.jjml.llm.LlamaCppChatMessage;
+import org.argeo.jjml.llm.LlamaCppChatFormat;
+import org.argeo.jjml.llm.LlamaCppChatTemplateCapabilities;
+import org.argeo.jjml.llm.LlamaCppChatTool;
+import org.argeo.jjml.llm.LlamaCppChatToolChoice;
 import org.argeo.jjml.llm.LlamaCppContext;
 import org.argeo.jjml.llm.LlamaCppContextState;
+import org.argeo.jjml.llm.LlamaCppDevice;
 import org.argeo.jjml.llm.LlamaCppEmbeddingProcessor;
 import org.argeo.jjml.llm.LlamaCppInstructProcessor;
 import org.argeo.jjml.llm.LlamaCppJavaSampler;
+import org.argeo.jjml.llm.LlamaCppMemoryBreakdown;
 import org.argeo.jjml.llm.LlamaCppModel;
 import org.argeo.jjml.llm.LlamaCppNative;
 import org.argeo.jjml.llm.LlamaCppNativeSampler;
 import org.argeo.jjml.llm.LlamaCppSamplerChain;
 import org.argeo.jjml.llm.LlamaCppSamplers;
+import org.argeo.jjml.llm.LlamaCppSpeculativeProcessor;
 import org.argeo.jjml.llm.LlamaCppTextProcessor;
 import org.argeo.jjml.llm.LlamaCppVocabulary;
+import org.argeo.jjml.llm.SpeculativeParams;
 import org.argeo.jjml.llm.params.ContextParams;
+import org.argeo.jjml.llm.params.FlashAttentionType;
 import org.argeo.jjml.llm.params.ModelParams;
 import org.argeo.jjml.llm.util.SimpleModelDownload;
 import org.argeo.jjml.llm.util.SimpleProgressCallback;
+import org.argeo.jjml.llm.util.ThinkingMode;
 
 /**
  * Minimal set of non-destructive in-memory tests, in order to check that a
@@ -89,6 +102,12 @@ class JjmlSmokeTests {
 				modelPath = new SimpleModelDownload().getOrDownloadModel(arg0, new SimpleProgressCallback());
 			if (!Files.exists(modelPath))
 				throw new IllegalArgumentException("Could not find GGUF model " + modelPath);
+			Path draftModelPath = null;
+			if (args.size() > 1) {
+				draftModelPath = Paths.get(args.get(1));
+				if (!Files.exists(draftModelPath))
+					throw new IllegalArgumentException("Could not find draft GGUF model " + draftModelPath);
+			}
 
 			ModelParams modelParams = defaultModelParams();
 			logger.log(INFO, "Loading model " + modelPath + " ...");
@@ -106,6 +125,7 @@ class JjmlSmokeTests {
 				logger.log(DEBUG, "Metadata:\n" + sb);
 
 				assertVocabulary(model.getVocabulary());
+				assertModelCapabilities(model);
 				// TODO return if vocabulary only
 //				if (true)
 //					return;
@@ -116,6 +136,8 @@ class JjmlSmokeTests {
 				assertJavaSampler(model);
 				assertChat(model);
 				assertSavedContextState(model);
+				if (draftModelPath != null)
+					assertExternalMtp(model, draftModelPath);
 			}
 			logger.log(INFO, "Smoke tests passed in " + (System.currentTimeMillis() - begin) / 1000 + " s with model "
 					+ modelPath.getFileName());
@@ -194,9 +216,63 @@ class JjmlSmokeTests {
 		return true;
 	}
 
+	void assertModelCapabilities(LlamaCppModel model) {
+		LlamaCppDevice[] devices = model.getDevices();
+		assert devices != null;
+		if (devices.length > 0) {
+			for (LlamaCppDevice device : devices) {
+				assert device != null;
+				assert device.backend() != null;
+				assert device.name() != null;
+				assert device.memoryFree() >= 0;
+				assert device.memoryTotal() >= 0;
+			}
+			logger.log(INFO, "Model devices: " + Arrays.toString(devices));
+		}
+
+		ContextParams contextParams = defaultContextParams();
+		long kvBytesPerToken = model.estimateKvCacheBytesPerToken(contextParams);
+		assert kvBytesPerToken > 0;
+		assert kvBytesPerToken == model.estimateKvCacheBytesPerToken(GgmlType.byCode(contextParams.type_k()),
+				GgmlType.byCode(contextParams.type_v()), FlashAttentionType.byCode(contextParams.flash_attn_type()));
+		logger.log(INFO, "Estimated KV cache bytes per token: " + kvBytesPerToken);
+
+		if (model.supportsEnableThinking()) {
+			List<LlamaCppChatMessage> messages = List.of(
+					new LlamaCppChatMessage(USER, "Answer with one short sentence."));
+			String enabled = model.formatChatMessages(messages, ThinkingMode.ENABLED);
+			String disabled = model.formatChatMessages(messages, ThinkingMode.DISABLED);
+			assert !enabled.isEmpty();
+			assert !disabled.isEmpty();
+			assert !enabled.equals(disabled);
+			logger.log(INFO, "Thinking switch smoke tests PASSED");
+		}
+
+		LlamaCppChatTemplateCapabilities caps = model.getChatTemplateCapabilities();
+		assert caps != null;
+		logger.log(INFO, "Chat template capabilities: " + caps.asMap());
+		if (caps.supportsTools()) {
+			List<LlamaCppChatTool> tools = List.of(new LlamaCppChatTool("echo_value", "Echo a value.",
+					"{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"}},\"required\":[\"value\"]}"));
+			LlamaCppChatFormat format = model.formatChatMessagesJinjaFull(
+					List.of(new LlamaCppChatMessage(USER, "Call a tool with value test.")), true,
+					ThinkingMode.DISABLED, null, tools, LlamaCppChatToolChoice.AUTO, false, null);
+			assert !format.prompt().isEmpty();
+			logger.log(INFO, "Tool chat format smoke tests PASSED, parser=" + format.parser() + ", grammar="
+					+ !format.grammar().isEmpty());
+		}
+
+		logger.log(INFO, "Model capability smoke tests PASSED");
+	}
+
 	void assertLoadUnloadDefaultContext(LlamaCppModel model) {
 		try (LlamaCppContext context = new LlamaCppContext(model);) {
 			assert context.getContextSize() > 0;
+			LlamaCppMemoryBreakdown[] memoryBreakdown = context.getMemoryBreakdown();
+			assert memoryBreakdown.length > 0;
+			long contextBytes = Arrays.stream(memoryBreakdown).mapToLong(LlamaCppMemoryBreakdown::contextBytes).sum();
+			assert contextBytes > 0;
+			logger.log(INFO, "Context memory bytes: " + contextBytes + " in " + memoryBreakdown.length + " buffers");
 		}
 		logger.log(INFO, "Load default context smoke tests PASSED");
 	}
@@ -243,6 +319,7 @@ class JjmlSmokeTests {
 				LlamaCppContext context = new LlamaCppContext(model, defaultContextParams() //
 						.with(n_ctx, 6144) //
 						.with(n_batch, sequenceIds.length * prompt.length()) //
+						.with(n_seq_max, requiredSequenceCount(sequenceIds)) //
 						.with(kv_unified, true) // required for robustness
 				); //
 				LlamaCppSamplerChain chain = LlamaCppSamplers.newDefaultSampler(false); //
@@ -269,6 +346,7 @@ class JjmlSmokeTests {
 				LlamaCppContext context = new LlamaCppContext(model, defaultContextParams() //
 						.with(n_ctx, 6144) //
 						.with(n_batch, sequenceIds.length * 64) //
+						.with(n_seq_max, requiredSequenceCount(sequenceIds)) //
 						.with(kv_unified, true) // required for robustness
 				); //
 				LlamaCppSamplerChain chain = new LlamaCppSamplerChain(
@@ -306,6 +384,7 @@ class JjmlSmokeTests {
 				LlamaCppSamplerChain chain = LlamaCppSamplers.newDefaultSampler(false); //
 		) {
 			LlamaCppInstructProcessor processor = new LlamaCppInstructProcessor(context, chain);
+			processor.setThinkingMode(ThinkingMode.DISABLED);
 
 			String systemMsg = "You are a helpful assistant, which answers as briefly as possible.";
 			System.out.println(SYSTEM.name() + " :\n" + systemMsg);
@@ -316,7 +395,7 @@ class JjmlSmokeTests {
 			processor.write(USER, userMsg01);
 
 			System.out.println(ASSISTANT.name() + " :\n");
-			processor.readMessage(System.out);
+			processor.readMessage(System.out, 128);
 
 			// make sure it can deal with a second message
 			String userMsg02 = "Thank you!";
@@ -324,7 +403,7 @@ class JjmlSmokeTests {
 			processor.write(USER, userMsg02);
 
 			System.out.println(ASSISTANT.name() + " :\n");
-			processor.readMessage(System.out);
+			processor.readMessage(System.out, 64);
 		}
 		logger.log(INFO, "Chat smoke tests PASSED");
 	}
@@ -351,6 +430,7 @@ class JjmlSmokeTests {
 				LlamaCppSamplerChain chain = LlamaCppSamplers.newDefaultSampler(false); //
 		) {
 			LlamaCppInstructProcessor processor = new LlamaCppInstructProcessor(context, chain);
+			processor.setThinkingMode(ThinkingMode.DISABLED);
 
 			long begin = System.currentTimeMillis();
 			String systemMsg = "You are a travel agent helping the user to chose the best holiday destination.\n"
@@ -388,7 +468,7 @@ class JjmlSmokeTests {
 			System.out.println(ASSISTANT.name() + " :\n");
 			long begin = System.currentTimeMillis();
 			try {
-				processor.readMessage(System.out);
+				processor.readMessage(System.out, 128);
 			} catch (IOException e) {
 				throw new UncheckedIOException(e);
 			}
@@ -422,6 +502,33 @@ class JjmlSmokeTests {
 		logger.log(INFO, "Saved context state smoke tests PASSED");
 	}
 
+	void assertExternalMtp(LlamaCppModel model, Path draftModelPath) throws Exception {
+		logger.log(INFO, "Loading explicit MTP draft model " + draftModelPath + " ...");
+		try (LlamaCppModel draftModel = LlamaCppModel
+				.load(draftModelPath, defaultModelParams().with(org.argeo.jjml.llm.params.ModelParam.n_gpu_layers,
+						999));) {
+			SpeculativeParams specParams = SpeculativeParams.draftMtp(2);
+			ContextParams contextParams = specParams.adjustTargetContextParams(defaultContextParams() //
+					.with(n_ctx, 1024) //
+					.with(n_batch, 128) //
+					.with(n_ubatch, 128) //
+					.with(n_threads, parallelism));
+			try (LlamaCppContext context = new LlamaCppContext(model, contextParams); //
+					LlamaCppSamplerChain chain = LlamaCppSamplers.newDefaultSampler(false); //
+					LlamaCppSpeculativeProcessor processor = new LlamaCppSpeculativeProcessor(context, draftModel,
+							chain, specParams);) {
+				String prompt = model.formatChatMessages(
+						List.of(new LlamaCppChatMessage(USER, "Answer with exactly one word: ok")),
+						ThinkingMode.DISABLED);
+				IntBuffer promptTokens = model.getVocabulary().tokenize(prompt);
+				processor.begin(promptTokens);
+				int[] output = processor.readArray(8);
+				assert output.length > 0;
+				logger.log(INFO, "External MTP smoke tests PASSED: " + processor.getStats());
+			}
+		}
+	}
+
 	/*
 	 * STATIC UTILITIES
 	 */
@@ -435,6 +542,10 @@ class JjmlSmokeTests {
 		System.err.println("Usage: java " + JjmlSmokeTests.class.getName() + //
 				".java path/to/model.gguf | hf_repo/model[:quantization]\n" + //
 				"e.g. java " + JjmlSmokeTests.class.getName() + ".java allenai/OLMo-2-0425-1B-Instruct-GGUF");
+	}
+
+	static int requiredSequenceCount(Integer[] sequenceIds) {
+		return Arrays.stream(sequenceIds).mapToInt(Integer::intValue).max().orElse(0) + 1;
 	}
 
 	/**

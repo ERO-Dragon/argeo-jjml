@@ -14,6 +14,11 @@ const std::string JCLASS_MODEL_PARAMS = JNI_PKG + "params/ModelParams";
 const std::string JCLASS_CONTEXT_PARAMS = JNI_PKG + "params/ContextParams";
 const std::string JCLASS_JAVA_SAMPLER = JNI_PKG + "LlamaCppJavaSampler";
 const std::string JCLASS_DEVICE = JNI_PKG + "LlamaCppDevice";
+const std::string JCLASS_MEMORY_BREAKDOWN = JNI_PKG + "LlamaCppMemoryBreakdown";
+const std::string JCLASS_CHAT_FORMAT = JNI_PKG + "LlamaCppChatFormat";
+const std::string JCLASS_CHAT_TEMPLATE_CAPABILITIES = JNI_PKG
+		+ "LlamaCppChatTemplateCapabilities";
+const std::string JCLASS_GRAMMAR_TRIGGER = JNI_PKG + "LlamaCppGrammarTrigger";
 
 // NOTE: Only standard Java or this package's classes should be cached,
 // as the class loader may change in a dynamic environment (such as OSGi).
@@ -40,5 +45,9 @@ extern jmethodID LlamaCppJavaSampler__reset;
 extern jmethodID ModelParams__init;
 extern jmethodID ContextParams__init;
 extern jmethodID LlamaCppDevice__init;
+extern jmethodID LlamaCppMemoryBreakdown__init;
+extern jmethodID LlamaCppChatFormat__init;
+extern jmethodID LlamaCppChatTemplateCapabilities__init;
+extern jmethodID LlamaCppGrammarTrigger__init;
 
 #endif

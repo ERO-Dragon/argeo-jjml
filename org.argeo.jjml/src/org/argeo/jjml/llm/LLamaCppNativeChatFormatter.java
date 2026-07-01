@@ -30,8 +30,18 @@ public class LLamaCppNativeChatFormatter {
 			byte[][] utf8Contents, boolean addGenerationPrompt, byte[] utf8ChatTemplate, boolean enableThinking,
 			byte[][] kwargsKeys, byte[][] kwargsValues);
 
+	/** Jinja2 mode returning llama.cpp's full chat formatting metadata. */
+	private static native LlamaCppChatFormat doFormatChatMessagesJinjaFull(long modelPointer, byte[][] utf8Roles,
+			byte[][] utf8Contents, boolean addGenerationPrompt, byte[] utf8ChatTemplate, boolean enableThinking,
+			byte[][] kwargsKeys, byte[][] kwargsValues, byte[][] toolNames, byte[][] toolDescriptions,
+			byte[][] toolParametersJson, byte[] toolChoice, boolean parallelToolCalls, byte[] jsonSchema);
+
 	/** Check if the model's chat template supports enable_thinking. */
 	private static native boolean doSupportsEnableThinking(long modelPointer, byte[] utf8ChatTemplate);
+
+	/** Return template capability flags inferred by llama.cpp. */
+	private static native LlamaCppChatTemplateCapabilities doGetTemplateCapabilities(long modelPointer,
+			byte[] utf8ChatTemplate);
 
 	/*
 	 * USABLE METHODS
@@ -86,6 +96,14 @@ public class LLamaCppNativeChatFormatter {
 	static String formatChatMessagesJinja(long modelPointer, List<LlamaCppChatMessage> messages,
 			boolean addGenerationPrompt, String chatTemplate, boolean enableThinking,
 			Map<String, String> chatTemplateKwargs) {
+		return formatChatMessagesJinjaFull(modelPointer, messages, addGenerationPrompt, chatTemplate, enableThinking,
+				chatTemplateKwargs, Collections.emptyList(), LlamaCppChatToolChoice.AUTO, false, null).prompt();
+	}
+
+	static LlamaCppChatFormat formatChatMessagesJinjaFull(long modelPointer, List<LlamaCppChatMessage> messages,
+			boolean addGenerationPrompt, String chatTemplate, boolean enableThinking,
+			Map<String, String> chatTemplateKwargs, List<LlamaCppChatTool> tools,
+			LlamaCppChatToolChoice toolChoice, boolean parallelToolCalls, String jsonSchema) {
 		List<LlamaCppChatMessage> msgs = messages.stream().filter(Objects::nonNull).collect(Collectors.toList());
 		byte[][] roles = new byte[msgs.size()][];
 		byte[][] contents = new byte[msgs.size()][];
@@ -106,10 +124,24 @@ public class LLamaCppNativeChatFormatter {
 			idx++;
 		}
 
+		List<LlamaCppChatTool> toolList = tools != null ? tools : Collections.emptyList();
+		byte[][] toolNames = new byte[toolList.size()][];
+		byte[][] toolDescriptions = new byte[toolList.size()][];
+		byte[][] toolParametersJson = new byte[toolList.size()][];
+		for (int i = 0; i < toolList.size(); i++) {
+			LlamaCppChatTool tool = toolList.get(i);
+			toolNames[i] = tool.name().getBytes(UTF_8);
+			toolDescriptions[i] = tool.description().getBytes(UTF_8);
+			toolParametersJson[i] = tool.parametersJson().getBytes(UTF_8);
+		}
+
 		byte[] templateBytes = chatTemplate != null ? chatTemplate.getBytes(UTF_8) : null;
-		byte[] res = doFormatChatMessagesJinja(modelPointer, roles, contents, addGenerationPrompt, templateBytes,
-				enableThinking, kwargsKeys, kwargsValues);
-		return new String(res, UTF_8);
+		byte[] toolChoiceBytes = (toolChoice != null ? toolChoice : LlamaCppChatToolChoice.AUTO).llamaName()
+				.getBytes(UTF_8);
+		byte[] jsonSchemaBytes = jsonSchema != null ? jsonSchema.getBytes(UTF_8) : null;
+		return doFormatChatMessagesJinjaFull(modelPointer, roles, contents, addGenerationPrompt, templateBytes,
+				enableThinking, kwargsKeys, kwargsValues, toolNames, toolDescriptions, toolParametersJson,
+				toolChoiceBytes, parallelToolCalls, jsonSchemaBytes);
 	}
 
 	/**
@@ -123,5 +155,10 @@ public class LLamaCppNativeChatFormatter {
 	static boolean supportsEnableThinking(long modelPointer, String chatTemplate) {
 		byte[] templateBytes = chatTemplate != null ? chatTemplate.getBytes(UTF_8) : null;
 		return doSupportsEnableThinking(modelPointer, templateBytes);
+	}
+
+	static LlamaCppChatTemplateCapabilities getTemplateCapabilities(long modelPointer, String chatTemplate) {
+		byte[] templateBytes = chatTemplate != null ? chatTemplate.getBytes(UTF_8) : null;
+		return doGetTemplateCapabilities(modelPointer, templateBytes);
 	}
 }

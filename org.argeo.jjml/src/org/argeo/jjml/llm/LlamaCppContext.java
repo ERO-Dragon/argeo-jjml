@@ -97,6 +97,8 @@ public class LlamaCppContext implements LongSupplier, AutoCloseable {
 
 	private native int doGetMaxSequenceCount();
 
+	private native LlamaCppMemoryBreakdown[] doGetMemoryBreakdown();
+
 	private native long doGetStateSize();
 
 	private native byte[] doGetStateDataAsBytes();
@@ -212,6 +214,14 @@ public class LlamaCppContext implements LongSupplier, AutoCloseable {
 
 	public int getMaxSequenceCount() {
 		return maxSequenceCount;
+	}
+
+	/**
+	 * Return the llama.cpp memory breakdown for this context by backend buffer
+	 * type. Values are sampled when this method is called.
+	 */
+	public LlamaCppMemoryBreakdown[] getMemoryBreakdown() {
+		return doGetMemoryBreakdown();
 	}
 
 	/*

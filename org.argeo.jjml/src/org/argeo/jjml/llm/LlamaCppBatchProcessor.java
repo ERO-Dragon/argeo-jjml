@@ -67,8 +67,17 @@ public class LlamaCppBatchProcessor {
 		this.sequenceIds = new int[parallelCount];
 		List<Integer> lst = new ArrayList<>(sequenceIds);
 		Collections.sort(lst);// ensure predictable order, as a best practice
-		for (int i = 0; i < lst.size(); i++)
+		int maxSequenceCount = context.getMaxSequenceCount();
+		for (int i = 0; i < lst.size(); i++) {
+			int sequenceId = lst.get(i);
+			if (sequenceId < 0)
+				throw new IllegalArgumentException("Sequence id must be non-negative: " + sequenceId);
+			if (sequenceId >= maxSequenceCount)
+				throw new IllegalArgumentException("Sequence id " + sequenceId
+						+ " is outside this context sequence capacity " + maxSequenceCount
+						+ ". Increase ContextParam.n_seq_max when creating the context.");
 			this.sequenceIds[i] = lst.get(i);
+		}
 		this.outputIds = new int[parallelCount];
 		Arrays.fill(outputIds, NO_OUTPUT_ID);
 

@@ -19,6 +19,7 @@
 #include "speculative.h"
 #include "../tp/llama.cpp/src/llama-ext.h"
 
+#include "jjml_llm.h"
 #include "org_argeo_jjml_llm_LlamaCppSpeculativeProcessor.h" // IWYU pragma: keep
 
 namespace {
@@ -61,34 +62,6 @@ struct jjml_speculative_engine {
 		}
 	}
 };
-
-static ggml_type jjml_spec_ggml_type_from_int(jint value,
-		const char *param_name) {
-	switch (value) {
-	case GGML_TYPE_F32:
-		return GGML_TYPE_F32;
-	case GGML_TYPE_F16:
-		return GGML_TYPE_F16;
-	case GGML_TYPE_BF16:
-		return GGML_TYPE_BF16;
-	case GGML_TYPE_Q8_0:
-		return GGML_TYPE_Q8_0;
-	case GGML_TYPE_Q4_0:
-		return GGML_TYPE_Q4_0;
-	case GGML_TYPE_Q4_1:
-		return GGML_TYPE_Q4_1;
-	case GGML_TYPE_IQ4_NL:
-		return GGML_TYPE_IQ4_NL;
-	case GGML_TYPE_Q5_0:
-		return GGML_TYPE_Q5_0;
-	case GGML_TYPE_Q5_1:
-		return GGML_TYPE_Q5_1;
-	default:
-		throw std::invalid_argument(
-				std::string("Unsupported ") + param_name
-						+ " cache type value: " + std::to_string(value));
-	}
-}
 
 static std::string jjml_spec_model_meta(const llama_model *model,
 		const char *key) {
@@ -197,11 +170,11 @@ static common_params_speculative jjml_spec_params_from_java(JNIEnv *env,
 			env->GetMethodID(clss, "draftSplitProbability", "()F"));
 	spec_params.draft.p_min = env->CallFloatMethod(params,
 			env->GetMethodID(clss, "draftMinProbability", "()F"));
-	spec_params.draft.cache_type_k = jjml_spec_ggml_type_from_int(
+	spec_params.draft.cache_type_k = jjml_llm_kv_cache_type_from_int(
 			env->CallIntMethod(params,
 					env->GetMethodID(clss, "cacheTypeKCode", "()I")),
 			"speculative cacheTypeK");
-	spec_params.draft.cache_type_v = jjml_spec_ggml_type_from_int(
+	spec_params.draft.cache_type_v = jjml_llm_kv_cache_type_from_int(
 			env->CallIntMethod(params,
 					env->GetMethodID(clss, "cacheTypeVCode", "()I")),
 			"speculative cacheTypeV");
@@ -593,11 +566,15 @@ static int jjml_spec_generate_with_sampler(jjml_speculative_engine *engine,
 } // namespace
 
 JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppSpeculativeProcessor_doInit(
-		JNIEnv *env, jclass, jlong contextPointer, jobject params) {
+		JNIEnv *env, jclass, jlong contextPointer, jlong draftModelPointer,
+		jobject params) {
 	try {
 		auto *ctx_tgt = argeo::jni::as_pointer<llama_context*>(contextPointer);
 		if (ctx_tgt == nullptr)
 			throw std::invalid_argument("Target context pointer is null");
+		auto *model_dft = draftModelPointer != 0 ?
+				argeo::jni::as_pointer<llama_model*>(draftModelPointer) :
+				nullptr;
 
 		common_params_speculative spec_params = jjml_spec_params_from_java(env,
 				params);
@@ -605,9 +582,9 @@ JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppSpeculativeProcessor_doI
 
 		const llama_model *model_tgt = llama_get_model(ctx_tgt);
 		std::string nextn_key;
-		int32_t nextn_layers = jjml_spec_model_nextn_predict_layers(model_tgt,
-				nextn_key);
-		if (nextn_layers <= 0) {
+		int32_t nextn_layers = jjml_spec_model_nextn_predict_layers(
+				model_dft != nullptr ? model_dft : model_tgt, nextn_key);
+		if (model_dft == nullptr && nextn_layers <= 0) {
 			throw std::runtime_error(
 					"MTP requires a GGUF with NextN/MTP layers. Metadata "
 							+ (nextn_key.empty() ?
@@ -634,12 +611,18 @@ JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppSpeculativeProcessor_doI
 				new jjml_speculative_engine());
 		engine->ctx_tgt = ctx_tgt;
 		engine->ctx_dft = llama_init_from_model(
-				const_cast<llama_model*>(model_tgt), cparams);
+				model_dft != nullptr ?
+						model_dft : const_cast<llama_model*>(model_tgt),
+				cparams);
 		if (engine->ctx_dft == nullptr)
 			throw std::runtime_error(
-					"Failed to create MTP context for model with "
-							+ std::to_string(nextn_layers)
-							+ " NextN/MTP layer(s). Check that the GGUF contains the matching MTP tensors and that the Vulkan backend can allocate the extra draft context.");
+					model_dft != nullptr ?
+							std::string(
+									"Failed to create MTP context for explicit draft model. Check that the draft GGUF matches the target model and that the Vulkan backend can allocate the extra draft context.") :
+							std::string(
+									"Failed to create MTP context for model with ")
+									+ std::to_string(nextn_layers)
+									+ " NextN/MTP layer(s). Check that the GGUF contains the matching MTP tensors and that the Vulkan backend can allocate the extra draft context.");
 
 		spec_params.draft.ctx_tgt = ctx_tgt;
 		spec_params.draft.ctx_dft = engine->ctx_dft;

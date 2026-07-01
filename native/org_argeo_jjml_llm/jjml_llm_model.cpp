@@ -11,11 +11,14 @@
 
 #include <llama.h>
 
+#include "../tp/llama.cpp/src/llama-ext.h"
+
 #include <argeo/jni/argeo_jni.h>
 
 #include "org_argeo_jjml_llm_LlamaCppModel.h" // IWYU pragma: keep
 #include "org_argeo_jjml_llm_LlamaCppBackend.h" // IWYU pragma: keep
 
+#include "jjml_llm.h"
 #include "org_argeo_jjml_llm_.h"
 
 // CONSTANTS
@@ -288,34 +291,8 @@ JNIEXPORT jobjectArray JNICALL Java_org_argeo_jjml_llm_LlamaCppBackend_doGetDevi
 
 		for (jsize i = 0; i < count; i++) {
 			ggml_backend_dev_t device = ggml_backend_dev_get(i);
-			struct ggml_backend_dev_props props;
-			ggml_backend_dev_get_props(device, &props);
-			ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(device);
-
-			jstring backend = env->NewStringUTF(
-					reg != nullptr && ggml_backend_reg_name(reg) != nullptr ?
-							ggml_backend_reg_name(reg) : "");
-			jstring name = env->NewStringUTF(
-					props.name != nullptr ? props.name : "");
-			jstring description = props.description != nullptr ?
-					env->NewStringUTF(props.description) : nullptr;
-			jstring deviceId = props.device_id != nullptr ?
-					env->NewStringUTF(props.device_id) : nullptr;
-
-			jobject deviceObj = env->NewObject(deviceClass, LlamaCppDevice__init, //
-					backend, name, description, deviceId, //
-					static_cast<jint>(props.type), //
-					static_cast<jlong>(props.memory_free), //
-					static_cast<jlong>(props.memory_total));
-
+			jobject deviceObj = jjml_llm_new_device(env, device);
 			env->SetObjectArrayElement(res, i, deviceObj);
-
-			env->DeleteLocalRef(backend);
-			env->DeleteLocalRef(name);
-			if (description != nullptr)
-				env->DeleteLocalRef(description);
-			if (deviceId != nullptr)
-				env->DeleteLocalRef(deviceId);
 			env->DeleteLocalRef(deviceObj);
 		}
 		return res;
@@ -450,6 +427,48 @@ JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doGetModelSize(
 	static_assert(sizeof(jlong) >= sizeof(uint64_t));
 	auto *model = argeo::jni::as_pointer<llama_model*>(env, obj);
 	return llama_model_size(model);
+}
+
+JNIEXPORT jlong JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doEstimateKvCacheBytesPerToken(
+		JNIEnv *env, jobject obj, jint typeK, jint typeV,
+		jint flashAttentionType) {
+	try {
+		const ggml_type ggml_type_k = jjml_llm_kv_cache_type_from_int(typeK,
+				"type_k");
+		const ggml_type ggml_type_v = jjml_llm_kv_cache_type_from_int(typeV,
+				"type_v");
+		llama_flash_attn_type flash_attn_type =
+				jjml_llm_flash_attn_type_from_int(flashAttentionType);
+		auto *model = argeo::jni::as_pointer<llama_model*>(env, obj);
+		return static_cast<jlong>(
+				llama_model_estimate_kv_cache_bytes_per_token(model, ggml_type_k,
+						ggml_type_v, flash_attn_type));
+	} catch (const std::exception &ex) {
+		argeo::jni::throw_to_java(env, ex);
+		return 0;
+	}
+}
+
+JNIEXPORT jobjectArray JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doGetDevices(
+		JNIEnv *env, jobject obj) {
+	try {
+		auto *model = argeo::jni::as_pointer<llama_model*>(env, obj);
+		const jsize count = static_cast<jsize>(llama_model_n_devices(model));
+		jclass deviceClass = argeo::jni::find_jclass(env, JCLASS_DEVICE);
+		jobjectArray res = env->NewObjectArray(count, deviceClass, nullptr);
+
+		for (jsize i = 0; i < count; i++) {
+			ggml_backend_dev_t device = llama_model_get_device(model, i);
+			if (device == nullptr)
+				continue;
+			jobject deviceObj = jjml_llm_new_device(env, device);
+			env->SetObjectArrayElement(res, i, deviceObj);
+			env->DeleteLocalRef(deviceObj);
+		}
+		return res;
+	} catch (const std::exception &ex) {
+		return argeo::jni::throw_to_java(env, ex);
+	}
 }
 
 JNIEXPORT jint JNICALL Java_org_argeo_jjml_llm_LlamaCppModel_doGetEndOfGenerationToken(
