@@ -2,6 +2,8 @@ package org.argeo.jjml.llm;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.argeo.jjml.llm.params.ModelParam.n_gpu_layers;
+import static org.argeo.jjml.llm.params.ModelParam.no_alloc;
+import static org.argeo.jjml.llm.params.ModelParam.use_mmap;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -439,6 +441,58 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 	}
 
 	/**
+	 * Collect model-level metadata and capability facts without allocating real
+	 * model weights.
+	 */
+	public static LlamaCppModelInfo inspectModel(Path localPath, ModelParams modelParams) throws IOException {
+		Objects.requireNonNull(localPath);
+		Objects.requireNonNull(modelParams);
+		ModelParams inspectionModelParams = modelParams.with(no_alloc, true).with(use_mmap, false);
+		try (LlamaCppModel model = load(localPath, inspectionModelParams)) {
+			return captureModelInfo(model, localPath, modelParams, inspectionModelParams);
+		}
+	}
+
+	/**
+	 * Collect model-level metadata and capability facts using default model
+	 * parameters.
+	 */
+	public static LlamaCppModelInfo inspectModel(Path localPath) throws IOException {
+		return inspectModel(localPath, defaultModelParams());
+	}
+
+	/**
+	 * Collect preflight model and context facts before allocating the real runtime
+	 * context.
+	 * <p>
+	 * This uses llama.cpp's {@code no_alloc} model loading path and creates a
+	 * no-allocation context with the provided parameters. It captures GGUF
+	 * metadata, model capability facts, effective context parameters, and simulated
+	 * native memory allocation sizes, then immediately releases the native model and
+	 * context.
+	 */
+	public static LlamaCppContextPlan planContext(Path localPath, ModelParams modelParams, ContextParams contextParams)
+			throws IOException {
+		Objects.requireNonNull(localPath);
+		Objects.requireNonNull(modelParams);
+		Objects.requireNonNull(contextParams);
+		ModelParams planningModelParams = modelParams.with(no_alloc, true).with(use_mmap, false);
+		try (LlamaCppModel model = load(localPath, planningModelParams);
+				LlamaCppContext context = new LlamaCppContext(model, contextParams)) {
+			LlamaCppModelInfo modelInfo = captureModelInfo(model, localPath, modelParams, planningModelParams);
+			return new LlamaCppContextPlan(modelInfo, contextParams, context.getInitParams(), context.getContextSize(),
+					model.estimateKvCacheBytesPerToken(context.getInitParams()), context.getMemoryBreakdown());
+		}
+	}
+
+	/**
+	 * Collect preflight context facts using default model parameters.
+	 */
+	public static LlamaCppContextPlan planContext(Path localPath, ContextParams contextParams) throws IOException {
+		return planContext(localPath, defaultModelParams(), contextParams);
+	}
+
+	/**
 	 * Loads a model asynchronously. Loading the model can be cancelled by calling
 	 * {@link Future#cancel(boolean)} with <code>true</code> on the returned
 	 * {@link Future}.
@@ -484,6 +538,15 @@ public class LlamaCppModel implements LongSupplier, AutoCloseable {
 //		if (initParams.use_mlock() && !LlamaCppBackend.supportsMlock())
 //			logger.log(WARNING,
 //					"mlock is not available, but " + ModelParam.use_mlock + " is set to " + initParams.use_mlock());
+	}
+
+	private static LlamaCppModelInfo captureModelInfo(LlamaCppModel model, Path localPath,
+			ModelParams requestedModelParams, ModelParams inspectionModelParams) {
+		return new LlamaCppModelInfo(localPath, requestedModelParams, inspectionModelParams, model.getVocabularySize(),
+				model.getContextTrainingSize(), model.getEmbeddingSize(), model.getLayerCount(), model.getMetadata(),
+				model.getDefaultPoolingType(), model.getMtpLayerCount(), model.getDescription(), model.getModelSize(),
+				model.getEndOfGenerationToken(), model.supportsEnableThinking(), model.getChatTemplateCapabilities(),
+				model.getDevices());
 	}
 
 	private static int resolveNextnPredictLayers(Map<String, String> metadata) {

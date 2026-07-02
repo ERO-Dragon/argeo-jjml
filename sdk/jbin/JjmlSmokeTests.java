@@ -44,6 +44,7 @@ import org.argeo.jjml.llm.LlamaCppChatTemplateCapabilities;
 import org.argeo.jjml.llm.LlamaCppChatTool;
 import org.argeo.jjml.llm.LlamaCppChatToolChoice;
 import org.argeo.jjml.llm.LlamaCppContext;
+import org.argeo.jjml.llm.LlamaCppContextPlan;
 import org.argeo.jjml.llm.LlamaCppContextState;
 import org.argeo.jjml.llm.LlamaCppDevice;
 import org.argeo.jjml.llm.LlamaCppEmbeddingProcessor;
@@ -51,6 +52,7 @@ import org.argeo.jjml.llm.LlamaCppInstructProcessor;
 import org.argeo.jjml.llm.LlamaCppJavaSampler;
 import org.argeo.jjml.llm.LlamaCppMemoryBreakdown;
 import org.argeo.jjml.llm.LlamaCppModel;
+import org.argeo.jjml.llm.LlamaCppModelInfo;
 import org.argeo.jjml.llm.LlamaCppNative;
 import org.argeo.jjml.llm.LlamaCppNativeSampler;
 import org.argeo.jjml.llm.LlamaCppSamplerChain;
@@ -110,6 +112,7 @@ class JjmlSmokeTests {
 			}
 
 			ModelParams modelParams = defaultModelParams();
+			assertContextPlan(modelPath, modelParams);
 			logger.log(INFO, "Loading model " + modelPath + " ...");
 			Future<LlamaCppModel> loaded = LlamaCppModel.loadAsync(modelPath, modelParams, new SimpleProgressCallback(),
 					null);
@@ -147,6 +150,53 @@ class JjmlSmokeTests {
 		} finally {
 			LlamaCppBackend.destroy();
 		}
+	}
+
+	void assertContextPlan(Path modelPath, ModelParams modelParams) throws IOException {
+		LlamaCppModelInfo modelInfo = LlamaCppModel.inspectModel(modelPath, modelParams);
+		assert modelInfo != null;
+		assert modelInfo.requestedModelParams() == modelParams;
+		assert modelInfo.inspectionModelParams().no_alloc();
+		assert !modelInfo.inspectionModelParams().use_mmap();
+		assert modelInfo.contextTrainingSize() > 0;
+		assert modelInfo.vocabularySize() > 0;
+		assert modelInfo.embeddingSize() > 0;
+		assert modelInfo.layerCount() > 0;
+		assert !modelInfo.metadata().isEmpty();
+		assert modelInfo.description() != null;
+		assert modelInfo.modelSize() > 0;
+		assert modelInfo.chatTemplateCapabilities() != null;
+
+		ContextParams contextParams = defaultContextParams() //
+				.with(n_ctx, 1024) //
+				.with(n_batch, 128) //
+				.with(n_ubatch, 128);
+		LlamaCppContextPlan plan = LlamaCppModel.planContext(modelPath, modelParams, contextParams);
+
+		assert plan != null;
+		assert plan.modelInfo().contextTrainingSize() == modelInfo.contextTrainingSize();
+		assert plan.modelInfo().modelSize() == modelInfo.modelSize();
+		assert plan.requestedModelParams() == modelParams;
+		assert plan.planningModelParams().no_alloc();
+		assert !plan.planningModelParams().use_mmap();
+		assert plan.requestedContextParams() == contextParams;
+		assert plan.contextSize() == 1024;
+		assert plan.contextTrainingSize() > 0;
+		assert plan.vocabularySize() > 0;
+		assert plan.embeddingSize() > 0;
+		assert plan.layerCount() > 0;
+		assert !plan.metadata().isEmpty();
+		assert plan.description() != null;
+		assert plan.modelSize() > 0;
+		assert plan.kvCacheBytesPerToken() > 0;
+		assert plan.kvCacheBytes() == plan.kvCacheBytesPerToken() * plan.contextSize();
+		assert plan.memoryBreakdown().length > 0;
+		assert plan.contextBytes() > 0;
+		assert plan.totalBytes() >= plan.modelBytes() + plan.contextBytes() + plan.computeBytes();
+		assert plan.chatTemplateCapabilities() != null;
+		logger.log(INFO, "Context plan: ctx=" + plan.contextSize() + ", trainingCtx="
+				+ plan.contextTrainingSize() + ", model=" + plan.modelBytes() + ", context="
+				+ plan.contextBytes() + ", compute=" + plan.computeBytes() + ", total=" + plan.totalBytes());
 	}
 
 	void assertVocabulary(LlamaCppVocabulary vocabulary) {
