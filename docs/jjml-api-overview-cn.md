@@ -10,7 +10,7 @@
 - `ggml` 使用我们的 `ggml-game` 分支，包含 Vulkan 时间片调度改动。
 - `whisper.cpp` 同步到新提交，当前没有额外本地修改。
 - JJML 的 Java/JNI 层已适配新版 llama.cpp / ggml 的构建、加载和推理路径。
-- Windows 一键构建脚本继续面向 MSVC v142、Java 21、Vulkan。
+- Windows 一键构建脚本继续面向 MSVC v142、Java 17、Vulkan。
 
 当前子模块状态以本地 `git submodule status` 为准：
 
@@ -144,7 +144,7 @@ Vulkan 时间片调度是 ggml 后端能力，和 MTP 没有参数关系。它�
 构建目标：
 
 - MSVC v142
-- Java 21
+- Java 17（字节码目标；构建 JDK 可为 17 或更高，产物始终是 major 61）
 - Vulkan enabled
 - Release
 

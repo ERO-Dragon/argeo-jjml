@@ -97,6 +97,8 @@ When building the reference submodules, setting `-DJJML_FORCE_BUILD_LLAMA_GGML=O
 
 By default, the Java part of JJML is built for the minimal supported Java version (that is, Java 11). In order to build for a later Java version, set `A2_JAVA_RELEASE` when configuring the CMake build, e.g. `-DA2_JAVA_RELEASE=21`.
 
+This fork targets **Java 17** for its published artifacts (Minecraft 1.20.x mods run on a Java 17 runtime). Use `-DA2_JAVA_RELEASE=17`, and note that `--release 17` is what guarantees the produced class files stay at major version 61 no matter which JDK performs the build.
+
 While a lot of work goes into making this build straightforward and portable, there must be a clear baseline:
 - The reference build for Linux is on Debian Sid (amd64/x86_64 and arm64/aarch64), using the official Debian packages for ggml and llama.cpp. (JJML's lead developer is a regular contributor to this Debian packaging effort)
 - The reference build for Windows is with the Microsoft MSVC compiler. (see example below)
@@ -108,8 +110,8 @@ An example Windows build would be (in a PowerShell terminal):
 
 ```
 # install a JDK
-winget install Microsoft.OpenJDK.21
-$env:JAVA_HOME = "C:/Program Files/Microsoft/jdk-21.0.8.9-hotspot"
+winget install Microsoft.OpenJDK.17
+$env:JAVA_HOME = "C:/Program Files/Microsoft/jdk-17" # adjust to the exact installed version
 
 # use CMake from Visual Studio 2022
 $env:CMAKE_HOME = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake"
